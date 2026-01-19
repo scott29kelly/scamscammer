@@ -67,3 +67,76 @@
 - `scamscrammer/jest.config.mjs` - Jest configuration
 - `scamscrammer/jest.setup.js` - Jest setup
 - `scamscrammer/package.json` - Added test scripts and dependencies
+
+---
+
+## Task: Create Call List Component and Page
+
+**Status:** Completed
+**Date:** 2026-01-19
+
+### What was done:
+
+1. **Created Calls API endpoint**
+   - Created `src/app/api/calls/route.ts` with GET handler
+   - Features:
+     - Pagination with configurable page size (default 20, max 100)
+     - Filtering by status, search term (phone number/notes), minimum rating, and tag
+     - Sorting by createdAt, duration, or rating (ascending/descending)
+     - Returns CallListResponse with calls array and pagination metadata
+   - Efficient parallel queries using Promise.all() for count and findMany
+
+2. **Created CallList component**
+   - Created `src/components/CallList.tsx` as a client component
+   - Features:
+     - Responsive table displaying: date, phone number, status, duration, rating, segment count
+     - Status badges with color-coding (COMPLETED=green, FAILED=red, etc.)
+     - Star rating display
+     - Phone number formatting for US numbers
+     - Duration formatting (mm:ss)
+     - Filter controls: search input, status dropdown, minimum rating dropdown
+     - Sortable columns (date, duration, rating) with visual indicators
+     - Pagination controls with page info
+     - Loading state with spinner
+     - Empty state with contextual messaging
+     - Error state with error message display
+     - Row click handler for navigation to detail page
+   - Dark theme styling with Tailwind CSS
+
+3. **Created Calls page**
+   - Created `src/app/calls/page.tsx` as the call history page
+   - Uses CallList component
+   - Click handler navigates to `/calls/[id]` for call details
+   - Professional header with title and description
+
+4. **Created app layout and styles**
+   - Created `src/app/layout.tsx` with metadata and dark theme body
+   - Created `src/app/globals.css` with Tailwind CSS import
+   - Created `tsconfig.json` with Next.js configuration and path aliases
+
+5. **Created comprehensive tests**
+   - Created `src/app/api/calls/__tests__/route.test.ts`
+   - 13 test cases covering:
+     - Basic paginated response
+     - Custom pagination parameters
+     - Filter by status
+     - Filter by search term
+     - Filter by minimum rating
+     - Filter by tag
+     - Sorting by field and order
+     - Default sort behavior
+     - Empty database handling
+     - Database error handling (500 response)
+     - Invalid status filter handling
+     - Maximum limit enforcement
+     - Invalid rating filter handling
+   - All 17 tests pass (4 stats + 13 calls)
+
+### Files created/modified:
+- `scamscrammer/src/app/api/calls/route.ts` - Calls API endpoint
+- `scamscrammer/src/app/api/calls/__tests__/route.test.ts` - API tests (13 tests)
+- `scamscrammer/src/components/CallList.tsx` - Reusable call list component
+- `scamscrammer/src/app/calls/page.tsx` - Call history page
+- `scamscrammer/src/app/layout.tsx` - Root layout with metadata
+- `scamscrammer/src/app/globals.css` - Global styles with Tailwind
+- `scamscrammer/tsconfig.json` - TypeScript configuration
