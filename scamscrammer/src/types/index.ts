@@ -15,7 +15,8 @@ export { CallStatus, Speaker } from '@prisma/client';
 export interface ApiErrorResponse {
   error: string;
   code?: string;
-  details?: Record<string, string>;
+  details?: Record<string, unknown>;
+  requestId?: string;
 }
 
 /**

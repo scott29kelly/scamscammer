@@ -14,6 +14,10 @@ const config = {
         moduleResolution: 'node',
         esModuleInterop: true,
         allowSyntheticDefaultImports: true,
+        baseUrl: '.',
+        paths: {
+          '@/*': ['src/*'],
+        },
       },
     }],
   },

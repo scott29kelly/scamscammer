@@ -8,8 +8,33 @@ import { NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import type { DashboardStats, ApiErrorResponse, CallListItem } from '@/types';
 import { CallStatus } from '@prisma/client';
+import {
+  logger,
+  generateRequestId,
+  setRequestContext,
+  clearRequestContext,
+} from '@/lib/logger';
+import {
+  DatabaseError,
+  wrapPrismaError,
+  formatErrorResponse,
+  getErrorStatusCode,
+} from '@/lib/errors';
+import { monitoring, trackDatabaseQuery, createRequestMonitoring } from '@/lib/monitoring';
 
 export async function GET(): Promise<NextResponse<DashboardStats | ApiErrorResponse>> {
+  const requestId = generateRequestId();
+  setRequestContext({
+    requestId,
+    method: 'GET',
+    path: '/api/stats',
+    startTime: Date.now(),
+  });
+
+  const requestMonitoring = createRequestMonitoring('GET', '/api/stats');
+
+  logger.info('Fetching dashboard statistics');
+
   try {
     // Get the date 30 days ago for the callsByDay chart
     const thirtyDaysAgo = new Date();
@@ -160,12 +185,32 @@ export async function GET(): Promise<NextResponse<DashboardStats | ApiErrorRespo
       longestCalls: longestCalls.map(mapToCallListItem),
     };
 
+    logger.info('Dashboard statistics fetched successfully', {
+      totalCalls: stats.totalCalls,
+      totalDuration: stats.totalDuration,
+    });
+
+    requestMonitoring.recordSuccess();
+
     return NextResponse.json(stats);
   } catch (error) {
-    console.error('Error fetching stats:', error);
-    return NextResponse.json(
-      { error: 'Failed to fetch statistics' },
-      { status: 500 }
+    logger.error(
+      'Failed to fetch statistics',
+      error instanceof Error ? error : new Error(String(error)),
+      { requestId }
     );
+
+    requestMonitoring.recordError();
+
+    // Wrap database errors for proper handling
+    const appError = error instanceof DatabaseError ? error : wrapPrismaError(error);
+
+    const errorResponse = formatErrorResponse(appError, requestId);
+
+    return NextResponse.json(errorResponse, {
+      status: getErrorStatusCode(appError),
+    });
+  } finally {
+    clearRequestContext();
   }
 }

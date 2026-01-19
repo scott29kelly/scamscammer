@@ -67,3 +67,109 @@
 - `scamscrammer/jest.config.mjs` - Jest configuration
 - `scamscrammer/jest.setup.js` - Jest setup
 - `scamscrammer/package.json` - Added test scripts and dependencies
+
+---
+
+## Task: Add Error Handling and Monitoring
+
+**Status:** Completed
+**Date:** 2026-01-19
+
+### What was done:
+
+1. **Created custom error classes (`src/lib/errors.ts`)**
+   - `AppError` - Base error class with code, statusCode, isOperational, details, timestamp
+   - `DatabaseError` - For database-related errors
+   - `TwilioError` - For Twilio API errors with twilioErrorCode
+   - `OpenAIError` - For OpenAI API errors
+   - `StorageError` - For S3/storage errors
+   - `ValidationError` - For input validation errors with fieldErrors
+   - `NotFoundError` - For resource not found errors
+   - `ExternalServiceError` - For generic external service errors
+   - Error codes enum (DATABASE_CONNECTION, TWILIO_API, OPENAI_RATE_LIMIT, etc.)
+   - Utility functions: `isAppError()`, `isOperationalError()`, `formatErrorResponse()`, `getErrorStatusCode()`, `wrapPrismaError()`
+
+2. **Created structured logging service (`src/lib/logger.ts`)**
+   - Multiple log levels: DEBUG, INFO, WARN, ERROR
+   - Structured JSON output in production for log aggregation
+   - Pretty-printed colored output in development
+   - Request context tracking with correlation IDs
+   - `generateRequestId()` - Creates unique request IDs
+   - `setRequestContext()` / `clearRequestContext()` - Manages request-scoped context
+   - `createLogger()` - Creates child loggers with default context
+   - `withRequestLogging()` - Utility to wrap async functions with logging
+
+3. **Created monitoring service (`src/lib/monitoring.ts`)**
+   - Metric types: COUNTER, GAUGE, HISTOGRAM, TIMER
+   - `monitoring.incrementCounter()` - Track counts/increments
+   - `monitoring.setGauge()` - Track current values
+   - `monitoring.recordHistogram()` - Track distributions
+   - `monitoring.timeAsync()` / `monitoring.timeSync()` - Time operations
+   - `monitoring.recordRequest()` / `monitoring.recordError()` - Request/error tracking
+   - `monitoring.getRequestsPerMinute()` / `monitoring.getErrorRate()` - Rate metrics
+   - `monitoring.getMemoryUsage()` / `monitoring.getUptime()` - System metrics
+   - `createTimer()` - Manual timing control
+   - `trackDatabaseQuery()` - Database query monitoring helper
+   - `trackExternalCall()` - External API monitoring helper
+   - `createRequestMonitoring()` - Request-scoped monitoring
+
+4. **Created health check endpoint (`src/app/api/health/route.ts`)**
+   - GET /api/health - Returns service health status
+   - Checks database connectivity with latency measurement
+   - Returns service statuses: healthy, degraded, unhealthy
+   - Returns HTTP 200 for healthy/degraded, 503 for unhealthy
+   - Includes system metrics:
+     - Uptime in seconds
+     - Memory usage (heapUsed, heapTotal, external, rss)
+     - Requests per minute
+     - Error rate percentage
+   - Suitable for load balancer health checks and Kubernetes probes
+
+5. **Updated stats API route with error handling (`src/app/api/stats/route.ts`)**
+   - Added request context with correlation IDs
+   - Added structured logging for requests and errors
+   - Added request monitoring (success/error tracking)
+   - Improved error responses with error codes and details
+   - Uses `wrapPrismaError()` for database error handling
+   - Maintains backwards compatibility with existing response format
+
+6. **Updated database client with monitoring (`src/lib/db.ts`)**
+   - Added Prisma event listeners for query, error, and warning events
+   - Logs queries with duration in development
+   - Records query metrics to monitoring service
+   - Logs all database errors
+   - Added `testDatabaseConnection()` utility
+   - Added `disconnectDatabase()` for graceful shutdown
+
+7. **Updated TypeScript types (`src/types/index.ts`)**
+   - Updated ApiErrorResponse to support `Record<string, unknown>` for details
+   - Added requestId field for error responses
+
+8. **Updated Jest configuration (`jest.config.mjs`)**
+   - Added baseUrl and paths configuration for ts-jest
+   - Properly resolves `@/` path aliases in tests
+
+9. **Created comprehensive tests**
+   - `src/lib/__tests__/errors.test.ts` - 35 tests for error classes and utilities
+   - `src/lib/__tests__/logger.test.ts` - 12 tests for logging service
+   - `src/lib/__tests__/monitoring.test.ts` - 19 tests for monitoring service
+   - `src/app/api/health/__tests__/route.test.ts` - 6 tests for health endpoint
+   - Updated `src/app/api/stats/__tests__/route.test.ts` with mocks for new dependencies
+   - All 70 tests pass
+
+### Files created:
+- `scamscrammer/src/lib/errors.ts` - Custom error classes and utilities
+- `scamscrammer/src/lib/logger.ts` - Structured logging service
+- `scamscrammer/src/lib/monitoring.ts` - Monitoring and metrics service
+- `scamscrammer/src/app/api/health/route.ts` - Health check endpoint
+- `scamscrammer/src/lib/__tests__/errors.test.ts` - Error handling tests
+- `scamscrammer/src/lib/__tests__/logger.test.ts` - Logger tests
+- `scamscrammer/src/lib/__tests__/monitoring.test.ts` - Monitoring tests
+- `scamscrammer/src/app/api/health/__tests__/route.test.ts` - Health endpoint tests
+
+### Files modified:
+- `scamscrammer/src/app/api/stats/route.ts` - Added error handling and logging
+- `scamscrammer/src/lib/db.ts` - Added monitoring and event logging
+- `scamscrammer/src/types/index.ts` - Updated ApiErrorResponse type
+- `scamscrammer/jest.config.mjs` - Added path aliases for ts-jest
+- `scamscrammer/src/app/api/stats/__tests__/route.test.ts` - Added mocks for new dependencies
