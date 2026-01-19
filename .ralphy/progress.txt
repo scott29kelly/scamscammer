@@ -1,2 +1,33 @@
 # Ralphy Progress Log
 
+## 2026-01-19: Create Earl AI Persona Configuration
+
+### Completed
+- Created `src/lib/persona.ts` with complete Earl Pemberton AI persona configuration
+- Implemented TypeScript interfaces: `PersonaConfig`, `TangentTopic`, `MishearingMapping`, `ResponseConfig`
+- Added `EARL_SYSTEM_PROMPT` constant with full character prompt from plan
+- Created `EARL_PERSONA` configuration object with:
+  - Character details (name, age, background, location)
+  - 10 tangent topics Earl can ramble about
+  - 20 signature phrases
+  - 25 mishearing mappings (e.g., "credit card" -> "bread cart")
+  - Response timing configuration
+- Implemented helper functions:
+  - `getRandomTangent()` - returns random tangent topic
+  - `getMishearing(word)` - returns misheard version of a word
+  - `getRandomPhrase()` - returns random signature phrase
+  - `getRandomPauseDuration()` - calculates pause timing
+  - `shouldTangent()` / `shouldMishear()` - probability-based decisions
+  - `applyMishearings(text)` - applies mishearings to input text
+  - `getAllMishearings()`, `getAllTangentTopics()`, `getAllSignaturePhrases()` - getters
+  - `createCustomPersona(overrides)` - for future persona expansion
+- Created comprehensive test suite with 35 passing tests
+- Set up project configuration (package.json, tsconfig.json, jest.config.js)
+
+### Files Created
+- `src/lib/persona.ts` - Main persona module
+- `src/lib/__tests__/persona.test.ts` - Test suite
+- `package.json` - Project configuration
+- `tsconfig.json` - TypeScript configuration
+- `jest.config.js` - Jest test configuration
+
