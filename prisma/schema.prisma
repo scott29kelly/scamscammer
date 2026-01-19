@@ -1,0 +1,71 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================================================
+// Call Model - Main record for each intercepted call
+// =============================================================================
+
+model Call {
+  id            String      @id @default(cuid())
+  twilioSid     String      @unique // Twilio Call SID for linking webhooks
+  fromNumber    String      // Caller's phone number (E.164 format)
+  toNumber      String      // Our Twilio phone number
+  status        CallStatus  @default(RINGING)
+  duration      Int?        // Call duration in seconds (set when completed)
+  recordingUrl  String?     // S3 URL for the recording
+  transcriptUrl String?     // S3 URL for the transcript
+  rating        Int?        // 1-5 star rating for entertainment value
+  notes         String?     // User notes about the call
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  // Relation to conversation segments
+  segments CallSegment[]
+
+  @@index([status])
+  @@index([createdAt])
+  @@index([fromNumber])
+}
+
+// =============================================================================
+// CallSegment Model - Individual conversation turns
+// =============================================================================
+
+model CallSegment {
+  id        String   @id @default(cuid())
+  callId    String
+  call      Call     @relation(fields: [callId], references: [id], onDelete: Cascade)
+  speaker   Speaker  // Who said this (SCAMMER or EARL)
+  text      String   // Transcribed text content
+  timestamp Int      // Seconds into the call when this was said
+  createdAt DateTime @default(now())
+
+  @@index([callId])
+  @@index([timestamp])
+}
+
+// =============================================================================
+// Enums
+// =============================================================================
+
+enum CallStatus {
+  RINGING     // Initial state when call comes in
+  IN_PROGRESS // Call has been answered
+  COMPLETED   // Call ended normally
+  FAILED      // Call failed (busy, error, etc.)
+  NO_ANSWER   // Caller didn't answer (for outbound) or hung up before answer
+}
+
+enum Speaker {
+  SCAMMER // The caller (presumably a scammer)
+  EARL    // Our AI persona
+}
