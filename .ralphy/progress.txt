@@ -67,3 +67,85 @@
 - `scamscrammer/jest.config.mjs` - Jest configuration
 - `scamscrammer/jest.setup.js` - Jest setup
 - `scamscrammer/package.json` - Added test scripts and dependencies
+
+---
+
+## Task: Create Call Detail Page with Audio Player
+
+**Status:** Completed
+**Date:** 2026-01-19
+
+### What was done:
+
+1. **Created Call Detail API endpoints**
+   - Created `src/app/api/calls/[id]/route.ts` with:
+     - `GET /api/calls/[id]` - Fetches a single call with all segments ordered by timestamp
+     - `PATCH /api/calls/[id]` - Updates call rating, notes, or tags
+   - Includes validation for rating (1-5 integer) and tags (array of strings)
+   - Proper error handling for 404 (not found) and 500 (server error)
+
+2. **Created AudioPlayer component**
+   - Created `src/components/AudioPlayer.tsx` with full-featured audio player:
+     - Play/pause controls
+     - Progress bar with click-to-seek
+     - Time display (current/total)
+     - Skip forward/back by 10 seconds
+     - Playback speed control (0.5x, 0.75x, 1x, 1.25x, 1.5x, 2x)
+     - Volume control with mute toggle
+     - Loading and error states
+     - onTimeUpdate callback for syncing with transcript
+     - Exported useAudioPlayerControl hook for external seeking
+
+3. **Created TranscriptViewer component**
+   - Created `src/components/TranscriptViewer.tsx`:
+     - Displays call segments with speaker labels (Earl/Scammer)
+     - Color-coded speakers (green for Earl, red for Scammer)
+     - Timestamps for each segment
+     - Highlights active segment based on audio playback time
+     - Auto-scrolls to active segment
+     - Click segment to seek audio to that timestamp
+     - Scrollable container for long transcripts
+
+4. **Created CallDetails component**
+   - Created `src/components/CallDetails.tsx`:
+     - Displays call metadata (from/to numbers, duration, date, status)
+     - Editable star rating (1-5 stars)
+     - Editable notes field with auto-save on blur
+     - Tag management (add/remove tags)
+     - Real-time save with visual feedback
+     - Phone number formatting
+     - Duration formatting
+
+5. **Created Call Detail Page**
+   - Created `src/app/calls/[id]/page.tsx`:
+     - Client-side data fetching with loading states
+     - Error handling with user-friendly messages
+     - Responsive layout (2-column on desktop, stacked on mobile)
+     - Header with back navigation
+     - Integrates AudioPlayer, TranscriptViewer, and CallDetails
+     - Syncs audio playback with transcript highlighting
+     - Click transcript to seek audio
+
+6. **Created app layout and styles**
+   - Created `src/app/layout.tsx` - Root layout with metadata
+   - Created `src/app/globals.css` - Tailwind CSS import
+   - Created `tsconfig.json` - TypeScript configuration with path aliases
+
+7. **Created comprehensive API tests**
+   - Created `src/app/api/calls/[id]/__tests__/route.test.ts` with 15 tests:
+     - GET: returns call with segments, 404 for missing, 500 on error, empty segments
+     - PATCH: updates rating/notes/tags, multiple fields, validation errors, 404, 500
+
+### Files created:
+- `scamscrammer/src/app/api/calls/[id]/route.ts` - Call detail API routes
+- `scamscrammer/src/app/api/calls/[id]/__tests__/route.test.ts` - API tests
+- `scamscrammer/src/components/AudioPlayer.tsx` - Audio player component
+- `scamscrammer/src/components/TranscriptViewer.tsx` - Transcript display component
+- `scamscrammer/src/components/CallDetails.tsx` - Call metadata component
+- `scamscrammer/src/app/calls/[id]/page.tsx` - Call detail page
+- `scamscrammer/src/app/layout.tsx` - Root layout
+- `scamscrammer/src/app/globals.css` - Global styles
+- `scamscrammer/tsconfig.json` - TypeScript configuration
+
+### Test results:
+All 19 tests pass (4 existing stats tests + 15 new call detail tests)
