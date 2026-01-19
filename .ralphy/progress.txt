@@ -1,2 +1,83 @@
 # Ralphy Progress Log
 
+## Task: Create Calls REST API Endpoints
+
+### Date: 2026-01-19
+
+### Summary
+Implemented the Calls REST API endpoints for the ScamScrammer project, enabling CRUD operations for call history management.
+
+### Changes Made
+
+1. **Project Foundation Setup**
+   - Initialized Next.js 14+ project with TypeScript and Tailwind CSS
+   - Configured Prisma ORM with PostgreSQL schema
+   - Created project directory structure following the plan
+
+2. **Database Schema** (`prisma/schema.prisma`)
+   - Created `Call` model with fields: id, twilioSid, fromNumber, toNumber, status, duration, recordingUrl, transcriptUrl, rating, notes, tags
+   - Created `CallSegment` model for transcript segments
+   - Defined `CallStatus` enum (RINGING, IN_PROGRESS, COMPLETED, FAILED, NO_ANSWER)
+   - Defined `Speaker` enum (SCAMMER, EARL)
+   - Added cascade delete for segments when call is deleted
+
+3. **Database Client** (`src/lib/db.ts`)
+   - Implemented Prisma client singleton pattern to prevent multiple instances during development
+
+4. **TypeScript Types** (`src/types/index.ts`)
+   - Created API response types (CallResponse, CallListItem, CallListResponse)
+   - Created pagination types (PaginationInfo)
+   - Created request types (CallListQueryParams, CallUpdatePayload)
+   - Created error response type (ApiErrorResponse)
+
+5. **Calls List API** (`src/app/api/calls/route.ts`)
+   - GET endpoint for listing calls with:
+     - Pagination (page, limit parameters)
+     - Filtering by status (CallStatus enum)
+     - Filtering by date range (startDate, endDate)
+     - Sorting (sortBy: createdAt | duration, sortOrder: asc | desc)
+     - Includes segment count for each call
+
+6. **Individual Call API** (`src/app/api/calls/[id]/route.ts`)
+   - GET: Retrieve single call with all segments (ordered by timestamp)
+   - PATCH: Update call rating (1-5), notes (string), tags (string[])
+     - Includes validation for rating range
+     - Returns validation errors with details
+   - DELETE: Remove call and associated data
+     - Uses cascade delete for segments
+     - Placeholder for S3 recording deletion (to be implemented with storage service)
+
+7. **Tests** (`src/__tests__/api/calls.test.ts`)
+   - 18 comprehensive tests covering:
+     - List endpoint with pagination, filtering, sorting
+     - Single call retrieval
+     - Call updates with validation
+     - Call deletion
+     - Error handling scenarios
+
+### Files Created/Modified
+- `scamscrammer/` - New Next.js project directory
+- `scamscrammer/prisma/schema.prisma` - Database schema
+- `scamscrammer/src/lib/db.ts` - Database client
+- `scamscrammer/src/types/index.ts` - TypeScript types
+- `scamscrammer/src/app/api/calls/route.ts` - List API endpoint
+- `scamscrammer/src/app/api/calls/[id]/route.ts` - Individual call endpoints
+- `scamscrammer/src/__tests__/api/calls.test.ts` - API tests
+- `scamscrammer/jest.config.mjs` - Jest configuration
+- `scamscrammer/jest.setup.js` - Jest setup file
+- `scamscrammer/package.json` - Added test scripts
+
+### API Endpoints Implemented
+```
+GET  /api/calls              - List all calls (paginated, filterable, sortable)
+GET  /api/calls/:id          - Get single call with segments
+PATCH /api/calls/:id         - Update rating, notes, tags
+DELETE /api/calls/:id        - Delete call and recording
+```
+
+### Test Results
+All 18 tests passing:
+- GET /api/calls: 6 tests
+- GET /api/calls/[id]: 2 tests
+- PATCH /api/calls/[id]: 6 tests
+- DELETE /api/calls/[id]: 3 tests

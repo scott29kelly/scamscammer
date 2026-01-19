@@ -1,0 +1,56 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Call {
+  id            String      @id @default(cuid())
+  twilioSid     String      @unique
+  fromNumber    String
+  toNumber      String
+  status        CallStatus
+  duration      Int?        // seconds
+  recordingUrl  String?
+  transcriptUrl String?
+  rating        Int?        // 1-5 stars for entertainment value
+  notes         String?
+  tags          String[]    // Array of tags
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  segments      CallSegment[]
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+model CallSegment {
+  id        String   @id @default(cuid())
+  callId    String
+  call      Call     @relation(fields: [callId], references: [id], onDelete: Cascade)
+  speaker   Speaker  // SCAMMER or EARL
+  text      String
+  timestamp Int      // seconds into call
+  createdAt DateTime @default(now())
+
+  @@index([callId])
+}
+
+enum CallStatus {
+  RINGING
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+  NO_ANSWER
+}
+
+enum Speaker {
+  SCAMMER
+  EARL
+}
