@@ -1,2 +1,87 @@
 # Ralphy Progress Log
 
+## Task: Implement OpenAI Realtime Voice Client (agent-6)
+
+### Completed: 2026-01-19
+
+### Summary
+Implemented the OpenAI Realtime Voice Client for real-time AI voice conversations with the Earl persona. This client enables bidirectional audio streaming via WebSocket to the OpenAI Realtime API.
+
+### Changes Made
+
+#### New Files
+- `src/lib/openai.ts` - OpenAI Realtime Voice Client implementation
+- `src/lib/__tests__/openai.test.ts` - Comprehensive test suite (53 tests)
+
+#### Modified Files
+- `package.json` - Added openai and ws dependencies
+- `src/types/index.ts` - Added missing OpenAI Realtime event type
+
+### Implementation Details
+
+#### OpenAIRealtimeClient Class
+The main client class provides:
+- **connect(options)** - Establishes WebSocket connection to OpenAI Realtime API
+- **sendAudio(audioChunk)** - Streams audio data (Buffer or base64) to OpenAI
+- **onResponse(callback)** - Unified callback for audio and transcript responses
+- **disconnect(reason)** - Clean shutdown with event emission
+- **setSystemPrompt(prompt)** - Configure or update persona instructions
+
+#### Additional Methods
+- **commitAudioBuffer()** - Manual turn detection trigger
+- **clearAudioBuffer()** - Clear pending audio without response
+- **createResponse()** - Manually trigger model response
+- **cancelResponse()** - Cancel in-progress response
+- **updateSession(config)** - Update session parameters live
+- **addConversationItem(item)** - Inject messages into conversation
+
+#### Event Handlers
+- **audio** - Receives audio chunks from model responses
+- **transcript** - Receives transcript deltas (partial and final)
+- **error** - Error events with retryability information
+- **disconnect** - Connection termination events
+- **stateChange** - Connection state transitions
+- **sessionCreated** - Session initialization confirmation
+- **inputTranscript** - Transcription of user speech
+- **speechStarted/speechStopped** - Voice activity detection
+- **responseComplete** - Full response completion
+- **rawEvent** - All raw API events for advanced handling
+
+#### Connection Features
+- Automatic reconnection with exponential backoff
+- Connection timeout handling (30 seconds)
+- Max 5 reconnection attempts
+- State management (disconnected/connecting/connected/reconnecting/error)
+- Pending message queue for reliability
+
+#### Factory Functions
+- **createEarlClient(apiKey)** - Pre-configured for Earl persona with:
+  - 'echo' voice (lower male voice for elderly character)
+  - Higher temperature (0.9) for varied responses
+  - Longer silence detection (800ms) for elderly speech patterns
+  - EARL_SYSTEM_PROMPT loaded automatically
+
+- **createRealtimeClient(apiKey, config)** - Basic client with custom config
+
+### Configuration
+- Model: gpt-4o-realtime-preview-2024-10-01
+- Default audio format: g711_ulaw (Twilio compatible)
+- Server VAD turn detection enabled
+- Input audio transcription via Whisper
+
+### Dependencies Added
+- openai: ^4.77.0
+- ws: ^8.18.0
+- @types/ws: ^8.5.13 (dev)
+
+### Tests
+53 tests covering:
+- Constructor and configuration
+- Connection lifecycle
+- Audio streaming
+- Event handling
+- Session management
+- Reconnection logic
+- Error handling
+- Factory functions
+
