@@ -2,6 +2,8 @@
 const config = {
   preset: 'ts-jest',
   testEnvironment: 'node',
+  roots: ['<rootDir>/src'],
+  modulePaths: ['<rootDir>/src'],
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1',
   },
@@ -14,6 +16,10 @@ const config = {
         moduleResolution: 'node',
         esModuleInterop: true,
         allowSyntheticDefaultImports: true,
+        baseUrl: '.',
+        paths: {
+          '@/*': ['src/*'],
+        },
       },
     }],
   },

@@ -67,3 +67,130 @@
 - `scamscrammer/jest.config.mjs` - Jest configuration
 - `scamscrammer/jest.setup.js` - Jest setup
 - `scamscrammer/package.json` - Added test scripts and dependencies
+
+---
+
+## Task: Add Authentication and Route Protection
+
+**Status:** Completed
+**Date:** 2026-01-19
+
+### What was done:
+
+1. **Added User and Session models to Prisma schema**
+   - Created `User` model with id, email, passwordHash, name, role, timestamps
+   - Created `Session` model for session management
+   - Added `UserRole` enum (USER, ADMIN)
+   - Updated `prisma/schema.prisma`
+
+2. **Installed authentication dependencies**
+   - Installed `next-auth@beta` (v5 for Next.js App Router)
+   - Installed `bcryptjs` for password hashing
+   - Installed `@types/bcryptjs` for TypeScript support
+
+3. **Created NextAuth.js configuration**
+   - Created `src/lib/auth.ts` with NextAuth configuration
+   - Configured credentials provider for email/password login
+   - Set up JWT session strategy
+   - Added callbacks for including user role in session
+   - Custom sign-in page at `/login`
+
+4. **Created NextAuth API route**
+   - Created `src/app/api/auth/[...nextauth]/route.ts`
+   - Exports GET and POST handlers from auth configuration
+
+5. **Implemented password utilities**
+   - Created `src/lib/password.ts` with:
+     - `hashPassword()` - bcrypt hash with 12 salt rounds
+     - `verifyPassword()` - secure password comparison
+
+6. **Created Next.js middleware for route protection**
+   - Created `src/middleware.ts` with auth middleware
+   - Protected routes:
+     - `/calls/*` - Dashboard pages
+     - `/api/calls/*` - REST API endpoints
+     - `/api/stats` - Statistics API
+   - Unprotected routes (as required):
+     - `/api/twilio/*` - Twilio webhooks (use signature validation)
+     - `/api/auth/*` - Auth endpoints
+     - `/login`, `/register` - Auth pages
+   - Unauthenticated API requests return 401 JSON error
+   - Unauthenticated page requests redirect to `/login`
+
+7. **Added authentication types**
+   - Updated `src/types/index.ts` with:
+     - Re-exported User, Session, UserRole from Prisma
+     - LoginCredentials interface
+     - RegisterData interface
+     - AuthUser interface
+   - Created `src/types/next-auth.d.ts` for NextAuth type extensions:
+     - Extended User to include role
+     - Extended Session to include user id and role
+     - Extended JWT to include id and role
+
+8. **Created login page UI**
+   - Created `src/app/login/page.tsx`
+   - Simple, clean form with email and password fields
+   - Error handling for invalid credentials
+   - Loading state during sign-in
+   - Redirects to callback URL after successful login
+   - Styled with Tailwind CSS
+
+9. **Created session provider component**
+   - Created `src/components/SessionProvider.tsx`
+   - Wraps NextAuthSessionProvider for client-side session access
+
+10. **Created database seed script**
+    - Created `prisma/seed.ts` for creating initial admin user
+    - Uses environment variables ADMIN_EMAIL and ADMIN_PASSWORD
+    - Added `db:seed` script to package.json
+
+11. **Wrote comprehensive tests**
+    - Created `src/lib/__tests__/password.test.ts`:
+      - Tests password hashing (different hashes each time)
+      - Tests password verification (correct/incorrect/empty)
+    - Created `src/lib/__tests__/auth-routes.test.ts`:
+      - Tests route protection logic
+      - Verifies `/calls/*` routes require auth
+      - Verifies `/api/calls/*` routes require auth
+      - Verifies `/api/stats` requires auth
+      - Verifies `/api/twilio/*` does NOT require auth
+      - Verifies `/login` does NOT require auth
+    - All 24 new tests pass (28 total with existing tests)
+
+12. **Fixed Jest configuration**
+    - Updated `jest.config.mjs` to properly resolve `@/` path aliases
+    - Added `roots` and `modulePaths` configuration
+    - Added `baseUrl` and `paths` to ts-jest tsconfig
+
+### Route Protection Summary:
+
+| Route Pattern | Protected | Behavior |
+|---------------|-----------|----------|
+| `/calls/*` | Yes | Redirect to /login |
+| `/api/calls/*` | Yes | Return 401 JSON |
+| `/api/stats` | Yes | Return 401 JSON |
+| `/api/twilio/*` | No | Uses Twilio signature validation |
+| `/api/auth/*` | No | Auth endpoints |
+| `/login` | No | Login page |
+
+### Files created/modified:
+- `scamscrammer/prisma/schema.prisma` - Added User, Session models and UserRole enum
+- `scamscrammer/prisma/seed.ts` - Database seed script for admin user
+- `scamscrammer/src/lib/auth.ts` - NextAuth.js configuration
+- `scamscrammer/src/lib/password.ts` - Password hashing utilities
+- `scamscrammer/src/middleware.ts` - Route protection middleware
+- `scamscrammer/src/app/api/auth/[...nextauth]/route.ts` - NextAuth API route
+- `scamscrammer/src/app/login/page.tsx` - Login page UI
+- `scamscrammer/src/components/SessionProvider.tsx` - Client session provider
+- `scamscrammer/src/types/index.ts` - Added auth types
+- `scamscrammer/src/types/next-auth.d.ts` - NextAuth type extensions
+- `scamscrammer/src/lib/__tests__/password.test.ts` - Password utility tests
+- `scamscrammer/src/lib/__tests__/auth-routes.test.ts` - Route protection tests
+- `scamscrammer/jest.config.mjs` - Fixed module resolution
+- `scamscrammer/package.json` - Added db:seed script and auth dependencies
+
+### Environment Variables Required:
+- `AUTH_SECRET` - NextAuth.js secret (generate with `openssl rand -base64 32`)
+- `ADMIN_EMAIL` - (optional) Email for initial admin user
+- `ADMIN_PASSWORD` - (optional) Password for initial admin user

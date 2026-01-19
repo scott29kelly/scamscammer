@@ -6,8 +6,35 @@
  */
 
 // Re-export Prisma types for convenience
-export type { Call, CallSegment } from '@prisma/client';
-export { CallStatus, Speaker } from '@prisma/client';
+export type { Call, CallSegment, User, Session } from '@prisma/client';
+export { CallStatus, Speaker, UserRole } from '@prisma/client';
+
+/**
+ * Login credentials for authentication
+ */
+export interface LoginCredentials {
+  email: string;
+  password: string;
+}
+
+/**
+ * User registration data
+ */
+export interface RegisterData {
+  email: string;
+  password: string;
+  name?: string;
+}
+
+/**
+ * Authenticated user info (safe to expose to client)
+ */
+export interface AuthUser {
+  id: string;
+  email: string;
+  name: string | null;
+  role: string;
+}
 
 /**
  * API Error Response
