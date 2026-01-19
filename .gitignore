@@ -1,0 +1,32 @@
+# Dependencies
+node_modules
+
+# Environment variables - keep out of version control
+.env
+.env.local
+.env.*.local
+
+# Prisma generated client
+/src/generated/prisma
+
+# Next.js
+.next/
+out/
+
+# Build outputs
+dist/
+build/
+
+# Logs
+*.log
+npm-debug.log*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
