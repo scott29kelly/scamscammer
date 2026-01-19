@@ -1,0 +1,85 @@
+// Prisma Schema for ScamScrammer
+// This schema defines the database models for tracking scam calls
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// A record of an incoming scam call handled by Earl
+model Call {
+  id            String     @id @default(cuid())
+  /// Twilio's unique call identifier
+  twilioSid     String     @unique
+  /// Caller's phone number (E.164 format)
+  fromNumber    String
+  /// Our Twilio phone number (E.164 format)
+  toNumber      String
+  /// Current status of the call
+  status        CallStatus @default(RINGING)
+  /// Duration of the call in seconds
+  duration      Int?
+  /// S3 URL for the call recording
+  recordingUrl  String?
+  /// S3 URL for the transcript file
+  transcriptUrl String?
+  /// Entertainment value rating (1-5 stars)
+  rating        Int?
+  /// User notes about the call
+  notes         String?
+  /// When the call was received
+  createdAt     DateTime   @default(now())
+  /// Last update timestamp
+  updatedAt     DateTime   @updatedAt
+
+  /// Conversation segments (transcribed dialogue)
+  segments CallSegment[]
+
+  @@index([status])
+  @@index([createdAt])
+  @@index([fromNumber])
+}
+
+/// A segment of conversation from a call
+model CallSegment {
+  id        String   @id @default(cuid())
+  /// Reference to the parent call
+  callId    String
+  call      Call     @relation(fields: [callId], references: [id], onDelete: Cascade)
+  /// Who spoke this segment
+  speaker   Speaker
+  /// Transcribed text content
+  text      String
+  /// Seconds into the call when this was spoken
+  timestamp Int
+  /// When this segment was created
+  createdAt DateTime @default(now())
+
+  @@index([callId])
+}
+
+/// Status of a call in the system
+enum CallStatus {
+  /// Call is ringing, not yet answered
+  RINGING
+  /// Call is in progress with Earl
+  IN_PROGRESS
+  /// Call completed successfully
+  COMPLETED
+  /// Call failed (error or disconnection)
+  FAILED
+  /// Call was not answered
+  NO_ANSWER
+}
+
+/// Speaker in a conversation segment
+enum Speaker {
+  /// The scam caller
+  SCAMMER
+  /// Our AI persona Earl
+  EARL
+}
