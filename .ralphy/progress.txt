@@ -1,2 +1,69 @@
 # Ralphy Progress Log
 
+## Task: Create Stats API Endpoint
+
+**Status:** Completed
+**Date:** 2026-01-19
+
+### What was done:
+
+1. **Set up Prisma ORM with PostgreSQL**
+   - Created `prisma/schema.prisma` with Call and CallSegment models
+   - Created `prisma.config.ts` for Prisma 7 configuration
+   - Installed `@prisma/client`, `@prisma/adapter-pg`, `pg`, and `dotenv`
+   - Generated Prisma client
+
+2. **Created database client singleton**
+   - Created `src/lib/db.ts` with Prisma client singleton pattern
+   - Configured for development hot-reload compatibility
+   - Uses `@prisma/adapter-pg` for Prisma 7 compatibility
+
+3. **Added TypeScript type definitions**
+   - Updated `src/types/index.ts` with:
+     - Re-exported Prisma types (Call, CallSegment, CallStatus, Speaker)
+     - ApiErrorResponse interface
+     - PaginationInfo interface
+     - CallListItem interface
+     - CallListResponse interface
+     - CallResponse interface
+     - DashboardStats interface
+
+4. **Implemented Stats API endpoint**
+   - Created `src/app/api/stats/route.ts` with GET handler
+   - Returns comprehensive dashboard statistics:
+     - `totalCalls` - total number of calls
+     - `totalDuration` - sum of all call durations (seconds)
+     - `averageDuration` - average call duration (rounded)
+     - `callsByStatus` - count per status (RINGING, IN_PROGRESS, COMPLETED, FAILED, NO_ANSWER)
+     - `callsByDay` - last 30 days with call counts (for charting)
+     - `topRatedCalls` - top 5 highest-rated calls
+     - `longestCalls` - top 5 longest duration calls
+   - Uses Prisma aggregations for efficiency (count, aggregate, groupBy, $queryRaw)
+   - All database queries run in parallel using Promise.all()
+   - Proper error handling with 500 response on failure
+
+5. **Set up Jest testing framework**
+   - Created `jest.config.mjs` with TypeScript support
+   - Created `jest.setup.js` for test configuration
+   - Added test and test:watch scripts to package.json
+   - Installed jest, ts-jest, @types/jest, and @testing-library/jest-dom
+
+6. **Created comprehensive tests**
+   - Created `src/app/api/stats/__tests__/route.test.ts`
+   - Tests cover:
+     - Successful response with mock data
+     - Empty database handling (all zeros/empty arrays)
+     - Database error handling (500 response)
+     - Missing days filled with zero counts
+   - All 4 tests pass
+
+### Files created/modified:
+- `scamscrammer/prisma/schema.prisma` - Database schema with Call, CallSegment models and enums
+- `scamscrammer/prisma.config.ts` - Prisma 7 configuration
+- `scamscrammer/src/lib/db.ts` - Prisma client singleton
+- `scamscrammer/src/types/index.ts` - TypeScript type definitions
+- `scamscrammer/src/app/api/stats/route.ts` - Stats API endpoint
+- `scamscrammer/src/app/api/stats/__tests__/route.test.ts` - API tests
+- `scamscrammer/jest.config.mjs` - Jest configuration
+- `scamscrammer/jest.setup.js` - Jest setup
+- `scamscrammer/package.json` - Added test scripts and dependencies
