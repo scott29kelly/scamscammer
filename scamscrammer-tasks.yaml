@@ -1,0 +1,391 @@
+# ScamScrammer - Ralphy Parallel Development Tasks
+# Run with: ./ralphy.sh --yaml scamscrammer-tasks.yaml --parallel --max-parallel 4 --branch-per-task --draft-pr
+
+tasks:
+  # ============================================================================
+  # GROUP 0: Project Foundation (runs first, in parallel)
+  # These tasks have NO dependencies and touch completely separate files
+  # ============================================================================
+  
+  - title: "Initialize Next.js Project Structure"
+    description: |
+      Create the base Next.js 14+ project with TypeScript and Tailwind CSS.
+      
+      Requirements:
+      - Use App Router (not Pages Router)
+      - Configure TypeScript strict mode
+      - Set up Tailwind with custom config for dashboard theme
+      - Create the folder structure as specified in the plan:
+        - src/app/ (pages and API routes)
+        - src/lib/ (utility modules)
+        - src/components/ (React components)
+        - src/types/ (TypeScript interfaces)
+      - Add .env.example with all required variables (empty values)
+      - Configure next.config.js for API routes
+      
+      Do NOT install Twilio, OpenAI, or database packages yet.
+    parallel_group: 0
+
+  - title: "Create Database Schema and Prisma Setup"
+    description: |
+      Set up Prisma ORM with PostgreSQL schema for call tracking.
+      
+      Requirements:
+      - Initialize Prisma in the project
+      - Create schema.prisma with models:
+        - Call (id, twilioSid, fromNumber, toNumber, status, duration, recordingUrl, etc.)
+        - CallSegment (id, callId, speaker, text, timestamp)
+        - Enums: CallStatus (RINGING, IN_PROGRESS, COMPLETED, FAILED, NO_ANSWER)
+        - Enums: Speaker (SCAMMER, EARL)
+      - Create src/lib/db.ts with Prisma client singleton
+      - Add database connection string placeholder to .env.example
+      
+      Do NOT run migrations - just create the schema files.
+    parallel_group: 0
+
+  - title: "Create TypeScript Interfaces and Types"
+    description: |
+      Define all TypeScript interfaces for the application.
+      
+      Create src/types/index.ts with:
+      - TwilioWebhookPayload interface (incoming call data)
+      - TwilioStatusPayload interface (call status updates)
+      - TwilioRecordingPayload interface (recording complete data)
+      - CallResponse interface (API response shape)
+      - CallSegmentResponse interface
+      - OpenAIRealtimeConfig interface
+      - EarlPersonaConfig interface
+      - DashboardStats interface
+      
+      Export all types. Use strict typing, no 'any' types.
+    parallel_group: 0
+
+  - title: "Create Earl AI Persona Configuration"
+    description: |
+      Create the Earl Pemberton AI persona module.
+      
+      Create src/lib/persona.ts with:
+      - EARL_SYSTEM_PROMPT constant (full system prompt from plan)
+      - EarlPersona class or config object with:
+        - name, age, background
+        - Array of tangent topics
+        - Array of signature phrases
+        - Array of mishearing mappings (e.g., "credit card" -> "bread cart")
+        - Configuration for response timing/delays
+      - Helper function: getRandomTangent()
+      - Helper function: getMishearing(word: string)
+      - Helper function: getRandomPhrase()
+      
+      Make the persona configurable for future expansion to other characters.
+    parallel_group: 0
+
+  # ============================================================================
+  # GROUP 1: Core Integrations (runs after Group 0 completes)
+  # These depend on the foundation but can run in parallel with each other
+  # ============================================================================
+
+  - title: "Implement Twilio Client and Helpers"
+    description: |
+      Create Twilio integration module for voice calls.
+      
+      Create src/lib/twilio.ts with:
+      - TwilioClient class wrapping the twilio SDK
+      - Method: generateTwiMLResponse(message: string) - returns TwiML for voice
+      - Method: generateStreamTwiML(websocketUrl: string) - TwiML for media streams
+      - Method: getCallDetails(callSid: string) - fetch call info
+      - Method: getRecording(recordingSid: string) - fetch recording URL
+      - Helper: validateTwilioSignature(req) - webhook security
+      - Helper: formatPhoneNumber(number: string) - E.164 format
+      
+      Install twilio package. Handle errors gracefully.
+      Use environment variables for credentials.
+    parallel_group: 1
+
+  - title: "Implement OpenAI Realtime Voice Client"
+    description: |
+      Create OpenAI Realtime API integration for voice conversations.
+      
+      Create src/lib/openai.ts with:
+      - OpenAIRealtimeClient class for WebSocket connections
+      - Method: connect(sessionConfig) - establish realtime session
+      - Method: sendAudio(audioChunk: Buffer) - stream audio to OpenAI
+      - Method: onResponse(callback) - handle AI responses
+      - Method: disconnect() - clean shutdown
+      - Method: setSystemPrompt(prompt: string) - configure persona
+      - Event handlers for: audio response, transcript, error, disconnect
+      
+      Install openai package. 
+      Import and use EARL_SYSTEM_PROMPT from persona.ts.
+      Handle connection errors and reconnection logic.
+    parallel_group: 1
+
+  - title: "Implement Storage Service for Recordings"
+    description: |
+      Create storage module for call recordings.
+      
+      Create src/lib/storage.ts with:
+      - StorageClient class (abstract S3 operations)
+      - Method: uploadRecording(callId: string, audioBuffer: Buffer) - upload to S3
+      - Method: getRecordingUrl(callId: string) - generate signed URL
+      - Method: deleteRecording(callId: string) - remove from storage
+      - Method: listRecordings(options: PaginationOptions) - list all
+      - Helper: generateStorageKey(callId: string) - consistent naming
+      
+      Install @aws-sdk/client-s3 package.
+      Use environment variables for AWS credentials.
+      Include error handling for upload failures.
+    parallel_group: 1
+
+  # ============================================================================
+  # GROUP 2: API Routes - Twilio Webhooks (runs after Group 1)
+  # These depend on the Twilio client being ready
+  # ============================================================================
+
+  - title: "Create Incoming Call Webhook Handler"
+    description: |
+      Implement the main incoming call webhook for Twilio.
+      
+      Create src/app/api/twilio/incoming/route.ts with:
+      - POST handler for incoming calls
+      - Validate Twilio signature for security
+      - Log call to database with RINGING status
+      - Return TwiML that:
+        - Plays initial Earl greeting
+        - Connects to WebSocket for real-time voice streaming
+      - Handle errors gracefully with fallback TwiML
+      
+      Import from: lib/twilio.ts, lib/db.ts
+      This is the entry point for all scam calls.
+    parallel_group: 2
+
+  - title: "Create Call Status Webhook Handler"
+    description: |
+      Implement call status update webhook.
+      
+      Create src/app/api/twilio/status/route.ts with:
+      - POST handler for status callbacks
+      - Validate Twilio signature
+      - Update call record in database based on status:
+        - 'initiated' -> IN_PROGRESS
+        - 'ringing' -> RINGING  
+        - 'answered' -> IN_PROGRESS
+        - 'completed' -> COMPLETED (also save duration)
+        - 'failed' / 'busy' / 'no-answer' -> appropriate status
+      - Log status transitions for debugging
+      
+      Import from: lib/twilio.ts, lib/db.ts
+    parallel_group: 2
+
+  - title: "Create Recording Complete Webhook Handler"
+    description: |
+      Implement recording completion webhook.
+      
+      Create src/app/api/twilio/recording/route.ts with:
+      - POST handler for recording status callbacks
+      - Validate Twilio signature
+      - When recording is 'completed':
+        - Fetch recording from Twilio
+        - Upload to S3 storage
+        - Update call record with recordingUrl
+        - Optionally trigger transcription job
+      - Handle recording failures gracefully
+      
+      Import from: lib/twilio.ts, lib/storage.ts, lib/db.ts
+    parallel_group: 2
+
+  # ============================================================================
+  # GROUP 3: Voice Streaming & Calls API (runs after Group 2)
+  # These depend on webhooks being in place
+  # ============================================================================
+
+  - title: "Create WebSocket Voice Stream Handler"
+    description: |
+      Implement real-time voice streaming between Twilio and OpenAI.
+      
+      Create src/app/api/voice/stream/route.ts with:
+      - WebSocket upgrade handler
+      - Bidirectional audio bridge:
+        - Twilio sends audio -> forward to OpenAI
+        - OpenAI responds -> forward to Twilio
+      - Use Earl persona system prompt
+      - Track conversation segments in database
+      - Handle connection lifecycle (open, message, close, error)
+      - Implement audio format conversion if needed (mulaw <-> pcm)
+      
+      This is the core real-time conversation handler.
+      Import from: lib/openai.ts, lib/persona.ts, lib/db.ts
+    parallel_group: 3
+
+  - title: "Create Calls REST API Endpoints"
+    description: |
+      Implement CRUD API for call history.
+      
+      Create src/app/api/calls/route.ts with:
+      - GET: List calls with pagination, filtering, sorting
+        - Query params: page, limit, status, startDate, endDate
+        - Include call segments count
+        - Return total count for pagination
+      - No POST needed (calls created by webhook)
+      
+      Create src/app/api/calls/[id]/route.ts with:
+      - GET: Single call with all segments
+      - PATCH: Update rating, notes, tags
+      - DELETE: Remove call and associated recording
+      
+      Import from: lib/db.ts, lib/storage.ts
+      Use proper TypeScript types for all responses.
+    parallel_group: 3
+
+  - title: "Create Stats API Endpoint"
+    description: |
+      Implement statistics aggregation endpoint.
+      
+      Create src/app/api/stats/route.ts with:
+      - GET: Return dashboard statistics
+        - totalCalls: number
+        - totalDuration: number (seconds)
+        - averageDuration: number
+        - callsByStatus: { status: count }
+        - callsByDay: array for chart (last 30 days)
+        - topRatedCalls: array of highest entertainment value
+        - longestCalls: array by duration
+      
+      Use Prisma aggregations for efficiency.
+      Import from: lib/db.ts
+    parallel_group: 3
+
+  # ============================================================================
+  # GROUP 4: Dashboard UI Components (runs after Group 3)
+  # These depend on APIs being available
+  # ============================================================================
+
+  - title: "Create Dashboard Layout and Landing Page"
+    description: |
+      Build the main dashboard layout and home page.
+      
+      Create/update src/app/layout.tsx with:
+      - Dark theme dashboard layout
+      - Navigation sidebar (Home, Calls, Stats)
+      - Header with logo "ScamScrammer"
+      - Responsive design
+      
+      Create src/app/page.tsx with:
+      - Welcome message
+      - Quick stats cards (total calls, time wasted, etc.)
+      - Recent calls preview (last 5)
+      - "How it works" section
+      
+      Use Tailwind CSS for all styling.
+      Create reusable StatsCard component.
+    parallel_group: 4
+
+  - title: "Create Call List Component and Page"
+    description: |
+      Build the call history list view.
+      
+      Create src/components/CallList.tsx with:
+      - Table/list of calls with columns: date, number, duration, status, rating
+      - Pagination controls
+      - Filter by status dropdown
+      - Sort by date/duration
+      - Click row to navigate to detail
+      - Loading and empty states
+      
+      Create src/app/calls/page.tsx with:
+      - Page title "Call History"
+      - CallList component with data fetching
+      - Use SWR or React Query for data fetching
+      
+      Style with Tailwind, make it look professional.
+    parallel_group: 4
+
+  - title: "Create Call Detail Page with Audio Player"
+    description: |
+      Build individual call detail view.
+      
+      Create src/components/CallPlayer.tsx with:
+      - Audio player with play/pause, seek, volume
+      - Waveform visualization (optional, use wavesurfer.js)
+      - Playback speed control
+      - Download button
+      
+      Create src/components/TranscriptViewer.tsx with:
+      - Display conversation segments
+      - Color code by speaker (SCAMMER vs EARL)
+      - Timestamps for each segment
+      - Click segment to seek audio (if possible)
+      
+      Create src/app/calls/[id]/page.tsx with:
+      - Call metadata header (date, duration, from number)
+      - CallPlayer component
+      - TranscriptViewer component
+      - Rating widget (1-5 stars)
+      - Notes textarea
+      - Delete button with confirmation
+      
+      Import components and fetch call data.
+    parallel_group: 4
+
+  # ============================================================================
+  # GROUP 5: Polish and Production Readiness (runs after Group 4)
+  # Final integration and cleanup
+  # ============================================================================
+
+  - title: "Add Authentication and Route Protection"
+    description: |
+      Implement basic authentication for the dashboard.
+      
+      Options (pick simplest):
+      - NextAuth.js with credentials provider
+      - Simple password protection via middleware
+      - Vercel password protection (if deploying there)
+      
+      Requirements:
+      - Protect all /calls/* and /api/calls/* routes
+      - Do NOT protect Twilio webhook routes (they use signature validation)
+      - Add login page if using NextAuth
+      - Store session securely
+      
+      Keep it simple - this is MVP auth, not enterprise.
+    parallel_group: 5
+
+  - title: "Create Deployment Configuration"
+    description: |
+      Prepare project for production deployment.
+      
+      Create/update:
+      - vercel.json with appropriate config
+      - Update next.config.js for production
+      - Create README.md with:
+        - Project description
+        - Setup instructions
+        - Environment variables guide
+        - Deployment steps
+        - Twilio webhook configuration guide
+      - Add .gitignore entries
+      - Create sample .env.local.example
+      
+      Ensure all environment variables are documented.
+      Add health check endpoint at /api/health.
+    parallel_group: 5
+
+  - title: "Add Error Handling and Monitoring"
+    description: |
+      Implement comprehensive error handling.
+      
+      Create src/lib/errors.ts with:
+      - Custom error classes (TwilioError, OpenAIError, StorageError)
+      - Error formatting helpers
+      - Logging utility (console for now, easy to swap for external service)
+      
+      Update all API routes to:
+      - Use try/catch with proper error responses
+      - Log errors with context
+      - Return appropriate HTTP status codes
+      - Never expose internal errors to clients
+      
+      Create src/app/api/health/route.ts:
+      - Return 200 if all services reachable
+      - Check database connection
+      - Return service status object
+    parallel_group: 5
