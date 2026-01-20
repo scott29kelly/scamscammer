@@ -1,153 +1,236 @@
 /**
- * Tests for the Health Check API endpoint
+ * Tests for Health Check API endpoint
  */
 
-// Define mock functions before jest.mock calls
-const mockQueryRaw = jest.fn();
-const mockGetMemoryUsage = jest.fn().mockReturnValue({
-  heapUsed: 50 * 1024 * 1024,
-  heapTotal: 100 * 1024 * 1024,
-  external: 10 * 1024 * 1024,
-  rss: 150 * 1024 * 1024,
-});
-const mockGetRequestsPerMinute = jest.fn().mockReturnValue(10);
-const mockGetErrorRate = jest.fn().mockReturnValue(0.05);
-const mockGetUptime = jest.fn().mockReturnValue(3600);
+import { GET } from '../route';
+import prisma from '@/lib/db';
 
-// Mock modules using aliased paths (as used in the source file)
+// Mock the Prisma client
 jest.mock('@/lib/db', () => ({
   __esModule: true,
   default: {
-    $queryRaw: mockQueryRaw,
+    $queryRaw: jest.fn(),
   },
 }));
 
+// Mock the logger
 jest.mock('@/lib/logger', () => ({
-  __esModule: true,
   logger: {
-    debug: jest.fn(),
-    info: jest.fn(),
-    warn: jest.fn(),
     error: jest.fn(),
-  },
-  generateRequestId: jest.fn().mockReturnValue('test-request-id'),
-  setRequestContext: jest.fn(),
-  clearRequestContext: jest.fn(),
-}));
-
-jest.mock('@/lib/monitoring', () => ({
-  __esModule: true,
-  monitoring: {
-    getMemoryUsage: mockGetMemoryUsage,
-    getRequestsPerMinute: mockGetRequestsPerMinute,
-    getErrorRate: mockGetErrorRate,
-    getUptime: mockGetUptime,
+    forRequest: jest.fn(() => ({
+      debug: jest.fn(),
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+    })),
   },
 }));
-
-// Import after mocks are set up
-import { GET } from '../route';
 
 describe('GET /api/health', () => {
+  const originalEnv = process.env;
+
   beforeEach(() => {
     jest.clearAllMocks();
-    // Reset mock implementations
-    mockQueryRaw.mockReset();
-    mockGetMemoryUsage.mockReturnValue({
-      heapUsed: 50 * 1024 * 1024,
-      heapTotal: 100 * 1024 * 1024,
-      external: 10 * 1024 * 1024,
-      rss: 150 * 1024 * 1024,
-    });
-    mockGetRequestsPerMinute.mockReturnValue(10);
-    mockGetErrorRate.mockReturnValue(0.05);
-    mockGetUptime.mockReturnValue(3600);
+    // Reset environment variables before each test
+    process.env = { ...originalEnv };
   });
 
-  it('should return healthy status when database is connected', async () => {
+  afterAll(() => {
+    process.env = originalEnv;
+  });
+
+  it('should return healthy status when all services are configured and database is connected', async () => {
+    // Set up environment variables
+    process.env.TWILIO_ACCOUNT_SID = 'AC123';
+    process.env.TWILIO_AUTH_TOKEN = 'token123';
+    process.env.TWILIO_PHONE_NUMBER = '+1234567890';
+    process.env.OPENAI_API_KEY = 'sk-test';
+    process.env.AWS_S3_BUCKET = 'my-bucket';
+    process.env.AWS_REGION = 'us-east-1';
+    process.env.AWS_ACCESS_KEY_ID = 'AKIATEST';
+    process.env.AWS_SECRET_ACCESS_KEY = 'secret123';
+
     // Mock successful database query
-    mockQueryRaw.mockResolvedValue([{ 1: 1 }]);
+    (prisma.$queryRaw as jest.Mock).mockResolvedValue([{ '?column?': 1 }]);
 
     const response = await GET();
     const data = await response.json();
 
     expect(response.status).toBe(200);
     expect(data.status).toBe('healthy');
-    expect(data.services).toHaveLength(1);
-    expect(data.services[0].name).toBe('database');
-    expect(data.services[0].status).toBe('healthy');
-    expect(data.services[0].latency).toBeDefined();
-  });
-
-  it('should return degraded status when database is slow', async () => {
-    // Mock slow database query (simulate by delaying)
-    mockQueryRaw.mockImplementation(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 1100));
-      return [{ 1: 1 }];
-    });
-
-    const response = await GET();
-    const data = await response.json();
-
-    expect(response.status).toBe(200); // Still 200 for degraded
-    expect(data.status).toBe('degraded');
-    expect(data.services[0].status).toBe('degraded');
-  });
-
-  it('should return unhealthy status when database is down', async () => {
-    // Mock database connection failure
-    mockQueryRaw.mockRejectedValue(new Error('Connection refused'));
-
-    const response = await GET();
-    const data = await response.json();
-
-    expect(response.status).toBe(503);
-    expect(data.status).toBe('unhealthy');
-    expect(data.services).toHaveLength(1);
-    expect(data.services[0].name).toBe('database');
-    expect(data.services[0].status).toBe('unhealthy');
-    expect(data.services[0].error).toBe('Connection refused');
-  });
-
-  it('should include system metrics', async () => {
-    mockQueryRaw.mockResolvedValue([{ 1: 1 }]);
-
-    const response = await GET();
-    const data = await response.json();
-
-    expect(data.metrics).toBeDefined();
-    expect(data.metrics.uptime).toBe(3600);
-    expect(data.metrics.memoryUsage).toEqual({
-      heapUsed: 50,
-      heapTotal: 100,
-      external: 10,
-      rss: 150,
-    });
-    expect(data.metrics.requestsPerMinute).toBe(10);
-    expect(data.metrics.errorRate).toBe(5); // 0.05 * 100 = 5%
-  });
-
-  it('should include timestamp and version', async () => {
-    mockQueryRaw.mockResolvedValue([{ 1: 1 }]);
-
-    const response = await GET();
-    const data = await response.json();
-
+    expect(data.services.database.status).toBe('healthy');
+    expect(data.services.database.latency).toBeDefined();
+    expect(data.services.twilio.status).toBe('healthy');
+    expect(data.services.openai.status).toBe('healthy');
+    expect(data.services.storage.status).toBe('healthy');
     expect(data.timestamp).toBeDefined();
-    expect(new Date(data.timestamp)).toBeInstanceOf(Date);
     expect(data.version).toBeDefined();
+    expect(data.uptime).toBeGreaterThanOrEqual(0);
   });
 
-  it('should handle unexpected errors gracefully', async () => {
-    // Mock an unexpected error scenario
-    mockQueryRaw.mockImplementation(() => {
-      throw new Error('Unexpected error');
-    });
+  it('should return unhealthy status when database connection fails', async () => {
+    // Set up all other services
+    process.env.TWILIO_ACCOUNT_SID = 'AC123';
+    process.env.TWILIO_AUTH_TOKEN = 'token123';
+    process.env.TWILIO_PHONE_NUMBER = '+1234567890';
+    process.env.OPENAI_API_KEY = 'sk-test';
+    process.env.AWS_S3_BUCKET = 'my-bucket';
+    process.env.AWS_REGION = 'us-east-1';
+    process.env.AWS_ACCESS_KEY_ID = 'AKIATEST';
+    process.env.AWS_SECRET_ACCESS_KEY = 'secret123';
+
+    // Mock database connection failure
+    (prisma.$queryRaw as jest.Mock).mockRejectedValue(new Error('Connection refused'));
 
     const response = await GET();
     const data = await response.json();
 
     expect(response.status).toBe(503);
     expect(data.status).toBe('unhealthy');
+    expect(data.services.database.status).toBe('unhealthy');
+    expect(data.services.database.message).toBe('Database connection failed');
+  });
+
+  it('should return degraded status when Twilio is not fully configured', async () => {
+    // Set up partial Twilio config (missing phone number)
+    process.env.TWILIO_ACCOUNT_SID = 'AC123';
+    process.env.TWILIO_AUTH_TOKEN = 'token123';
+    delete process.env.TWILIO_PHONE_NUMBER;
+    process.env.OPENAI_API_KEY = 'sk-test';
+    process.env.AWS_S3_BUCKET = 'my-bucket';
+    process.env.AWS_REGION = 'us-east-1';
+    process.env.AWS_ACCESS_KEY_ID = 'AKIATEST';
+    process.env.AWS_SECRET_ACCESS_KEY = 'secret123';
+
+    // Mock successful database query
+    (prisma.$queryRaw as jest.Mock).mockResolvedValue([{ '?column?': 1 }]);
+
+    const response = await GET();
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(data.status).toBe('degraded');
+    expect(data.services.twilio.status).toBe('degraded');
+    expect(data.services.twilio.message).toBe('Twilio phone number not configured');
+  });
+
+  it('should return degraded status when OpenAI key is missing', async () => {
+    process.env.TWILIO_ACCOUNT_SID = 'AC123';
+    process.env.TWILIO_AUTH_TOKEN = 'token123';
+    process.env.TWILIO_PHONE_NUMBER = '+1234567890';
+    delete process.env.OPENAI_API_KEY;
+    process.env.AWS_S3_BUCKET = 'my-bucket';
+    process.env.AWS_REGION = 'us-east-1';
+    process.env.AWS_ACCESS_KEY_ID = 'AKIATEST';
+    process.env.AWS_SECRET_ACCESS_KEY = 'secret123';
+
+    (prisma.$queryRaw as jest.Mock).mockResolvedValue([{ '?column?': 1 }]);
+
+    const response = await GET();
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(data.status).toBe('degraded');
+    expect(data.services.openai.status).toBe('unhealthy');
+    expect(data.services.openai.message).toBe('OpenAI API key not configured');
+  });
+
+  it('should return degraded status when storage is not configured', async () => {
+    process.env.TWILIO_ACCOUNT_SID = 'AC123';
+    process.env.TWILIO_AUTH_TOKEN = 'token123';
+    process.env.TWILIO_PHONE_NUMBER = '+1234567890';
+    process.env.OPENAI_API_KEY = 'sk-test';
+    delete process.env.AWS_S3_BUCKET;
+    delete process.env.AWS_REGION;
+
+    (prisma.$queryRaw as jest.Mock).mockResolvedValue([{ '?column?': 1 }]);
+
+    const response = await GET();
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(data.status).toBe('degraded');
+    expect(data.services.storage.status).toBe('degraded');
+    expect(data.services.storage.message).toBe('S3 bucket or region not configured');
+  });
+
+  it('should return degraded when AWS credentials are missing', async () => {
+    process.env.TWILIO_ACCOUNT_SID = 'AC123';
+    process.env.TWILIO_AUTH_TOKEN = 'token123';
+    process.env.TWILIO_PHONE_NUMBER = '+1234567890';
+    process.env.OPENAI_API_KEY = 'sk-test';
+    process.env.AWS_S3_BUCKET = 'my-bucket';
+    process.env.AWS_REGION = 'us-east-1';
+    delete process.env.AWS_ACCESS_KEY_ID;
+    delete process.env.AWS_SECRET_ACCESS_KEY;
+
+    (prisma.$queryRaw as jest.Mock).mockResolvedValue([{ '?column?': 1 }]);
+
+    const response = await GET();
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(data.status).toBe('degraded');
+    expect(data.services.storage.status).toBe('degraded');
+    expect(data.services.storage.message).toBe('AWS credentials not configured');
+  });
+
+  it('should return degraded when Twilio credentials are completely missing', async () => {
+    delete process.env.TWILIO_ACCOUNT_SID;
+    delete process.env.TWILIO_AUTH_TOKEN;
+    process.env.OPENAI_API_KEY = 'sk-test';
+    process.env.AWS_S3_BUCKET = 'my-bucket';
+    process.env.AWS_REGION = 'us-east-1';
+    process.env.AWS_ACCESS_KEY_ID = 'AKIATEST';
+    process.env.AWS_SECRET_ACCESS_KEY = 'secret123';
+
+    (prisma.$queryRaw as jest.Mock).mockResolvedValue([{ '?column?': 1 }]);
+
+    const response = await GET();
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(data.status).toBe('degraded');
+    expect(data.services.twilio.status).toBe('unhealthy');
+    expect(data.services.twilio.message).toBe('Twilio credentials not configured');
+  });
+
+  it('should include database latency on success', async () => {
+    process.env.TWILIO_ACCOUNT_SID = 'AC123';
+    process.env.TWILIO_AUTH_TOKEN = 'token123';
+    process.env.TWILIO_PHONE_NUMBER = '+1234567890';
+    process.env.OPENAI_API_KEY = 'sk-test';
+    process.env.AWS_S3_BUCKET = 'my-bucket';
+    process.env.AWS_REGION = 'us-east-1';
+    process.env.AWS_ACCESS_KEY_ID = 'AKIATEST';
+    process.env.AWS_SECRET_ACCESS_KEY = 'secret123';
+
+    (prisma.$queryRaw as jest.Mock).mockResolvedValue([{ '?column?': 1 }]);
+
+    const response = await GET();
+    const data = await response.json();
+
+    expect(data.services.database.latency).toBeDefined();
+    expect(typeof data.services.database.latency).toBe('number');
+    expect(data.services.database.latency).toBeGreaterThanOrEqual(0);
+  });
+
+  it('should include database latency even on failure', async () => {
+    process.env.TWILIO_ACCOUNT_SID = 'AC123';
+    process.env.TWILIO_AUTH_TOKEN = 'token123';
+    process.env.TWILIO_PHONE_NUMBER = '+1234567890';
+    process.env.OPENAI_API_KEY = 'sk-test';
+    process.env.AWS_S3_BUCKET = 'my-bucket';
+    process.env.AWS_REGION = 'us-east-1';
+    process.env.AWS_ACCESS_KEY_ID = 'AKIATEST';
+    process.env.AWS_SECRET_ACCESS_KEY = 'secret123';
+
+    (prisma.$queryRaw as jest.Mock).mockRejectedValue(new Error('Timeout'));
+
+    const response = await GET();
+    const data = await response.json();
+
+    expect(data.services.database.latency).toBeDefined();
+    expect(typeof data.services.database.latency).toBe('number');
   });
 });

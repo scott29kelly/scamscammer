@@ -1,157 +1,176 @@
 /**
  * Health Check API Endpoint
  *
- * GET /api/health - Returns the health status of the service and its dependencies
+ * GET /api/health - Returns service health status
  *
- * This endpoint is used for:
- * - Load balancer health checks
- * - Kubernetes liveness/readiness probes
- * - Monitoring and alerting systems
+ * Returns 200 if all services are reachable
+ * Returns 503 if any critical service is unavailable
  */
 
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/db';
-import { logger, generateRequestId, setRequestContext, clearRequestContext } from '@/lib/logger';
-import { monitoring, type ServiceHealth, type SystemHealth } from '@/lib/monitoring';
+import { logger } from '@/lib/logger';
+import { getErrorMessage } from '@/lib/errors';
+import type { ServiceStatus, HealthResponse } from '@/types';
+
+// Track server start time for uptime calculation
+const startTime = Date.now();
 
 /**
- * Health check response type
+ * Check database connection health
  */
-interface HealthCheckResponse {
-  status: 'healthy' | 'degraded' | 'unhealthy';
-  timestamp: string;
-  version: string;
-  services: ServiceHealth[];
-  metrics: {
-    uptime: number;
-    memoryUsage: {
-      heapUsed: number;
-      heapTotal: number;
-      external: number;
-      rss: number;
+async function checkDatabase(): Promise<ServiceStatus> {
+  const start = Date.now();
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    return {
+      status: 'healthy',
+      latency: Date.now() - start,
     };
-    requestsPerMinute: number;
-    errorRate: number;
+  } catch (error) {
+    logger.error('Database health check failed', { error: getErrorMessage(error) });
+    return {
+      status: 'unhealthy',
+      latency: Date.now() - start,
+      message: 'Database connection failed',
+    };
+  }
+}
+
+/**
+ * Check Twilio configuration (not actual connection test)
+ */
+function checkTwilio(): ServiceStatus {
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  const phoneNumber = process.env.TWILIO_PHONE_NUMBER;
+
+  if (!accountSid || !authToken) {
+    return {
+      status: 'unhealthy',
+      message: 'Twilio credentials not configured',
+    };
+  }
+
+  if (!phoneNumber) {
+    return {
+      status: 'degraded',
+      message: 'Twilio phone number not configured',
+    };
+  }
+
+  return {
+    status: 'healthy',
   };
 }
 
 /**
- * Check database connectivity
+ * Check OpenAI configuration
  */
-async function checkDatabase(): Promise<ServiceHealth> {
-  const start = Date.now();
-  try {
-    // Simple query to check database connectivity
-    await prisma.$queryRaw`SELECT 1`;
-    const latency = Date.now() - start;
+function checkOpenAI(): ServiceStatus {
+  const apiKey = process.env.OPENAI_API_KEY;
 
+  if (!apiKey) {
     return {
-      name: 'database',
-      status: latency < 1000 ? 'healthy' : 'degraded',
-      latency,
-      lastCheck: new Date(),
-    };
-  } catch (error) {
-    return {
-      name: 'database',
       status: 'unhealthy',
-      latency: Date.now() - start,
-      lastCheck: new Date(),
-      error: error instanceof Error ? error.message : 'Unknown error',
+      message: 'OpenAI API key not configured',
     };
   }
+
+  return {
+    status: 'healthy',
+  };
 }
 
 /**
- * Determine overall system status based on service statuses
+ * Check storage configuration
  */
-function determineOverallStatus(
-  services: ServiceHealth[]
-): 'healthy' | 'degraded' | 'unhealthy' {
-  const hasUnhealthy = services.some((s) => s.status === 'unhealthy');
-  const hasDegraded = services.some((s) => s.status === 'degraded');
+function checkStorage(): ServiceStatus {
+  const bucket = process.env.AWS_S3_BUCKET;
+  const region = process.env.AWS_REGION;
+  const accessKey = process.env.AWS_ACCESS_KEY_ID;
+  const secretKey = process.env.AWS_SECRET_ACCESS_KEY;
 
-  if (hasUnhealthy) return 'unhealthy';
-  if (hasDegraded) return 'degraded';
+  if (!bucket || !region) {
+    return {
+      status: 'degraded',
+      message: 'S3 bucket or region not configured',
+    };
+  }
+
+  if (!accessKey || !secretKey) {
+    return {
+      status: 'degraded',
+      message: 'AWS credentials not configured',
+    };
+  }
+
+  return {
+    status: 'healthy',
+  };
+}
+
+/**
+ * Determine overall health status from individual services
+ */
+function getOverallStatus(services: HealthResponse['services']): HealthResponse['status'] {
+  const statuses = Object.values(services).map((s) => s.status);
+
+  // If any service is unhealthy, overall is unhealthy
+  if (statuses.includes('unhealthy')) {
+    // Database is critical
+    if (services.database.status === 'unhealthy') {
+      return 'unhealthy';
+    }
+    // Other services being unhealthy means degraded
+    return 'degraded';
+  }
+
+  // If any service is degraded, overall is degraded
+  if (statuses.includes('degraded')) {
+    return 'degraded';
+  }
+
   return 'healthy';
 }
 
-export async function GET(): Promise<NextResponse<HealthCheckResponse>> {
-  const requestId = generateRequestId();
-  setRequestContext({
-    requestId,
-    method: 'GET',
-    path: '/api/health',
-    startTime: Date.now(),
-  });
+export async function GET(): Promise<NextResponse<HealthResponse>> {
+  const healthLogger = logger.forRequest(`health-${Date.now()}`);
 
-  logger.debug('Health check requested');
+  healthLogger.debug('Health check started');
 
-  try {
-    // Check all services in parallel
-    const services = await Promise.all([checkDatabase()]);
+  // Check all services (database check is async)
+  const [databaseStatus] = await Promise.all([
+    checkDatabase(),
+  ]);
 
-    // Get system metrics
-    const memoryUsage = monitoring.getMemoryUsage();
+  const twilioStatus = checkTwilio();
+  const openaiStatus = checkOpenAI();
+  const storageStatus = checkStorage();
 
-    const response: HealthCheckResponse = {
-      status: determineOverallStatus(services),
-      timestamp: new Date().toISOString(),
-      version: process.env.npm_package_version || '0.0.1',
-      services,
-      metrics: {
-        uptime: monitoring.getUptime(),
-        memoryUsage: {
-          heapUsed: Math.round(memoryUsage.heapUsed / 1024 / 1024), // MB
-          heapTotal: Math.round(memoryUsage.heapTotal / 1024 / 1024), // MB
-          external: Math.round(memoryUsage.external / 1024 / 1024), // MB
-          rss: Math.round(memoryUsage.rss / 1024 / 1024), // MB
-        },
-        requestsPerMinute: monitoring.getRequestsPerMinute(),
-        errorRate: Math.round(monitoring.getErrorRate() * 10000) / 100, // Percentage with 2 decimals
-      },
-    };
+  const services: HealthResponse['services'] = {
+    database: databaseStatus,
+    twilio: twilioStatus,
+    openai: openaiStatus,
+    storage: storageStatus,
+  };
 
-    // Set appropriate status code based on health status
-    const statusCode =
-      response.status === 'healthy'
-        ? 200
-        : response.status === 'degraded'
-          ? 200 // Still return 200 for degraded (service is functional)
-          : 503;
+  const overallStatus = getOverallStatus(services);
 
-    logger.info('Health check completed', {
-      status: response.status,
-      serviceStatuses: services.map((s) => ({ name: s.name, status: s.status })),
-    });
+  const response: HealthResponse = {
+    status: overallStatus,
+    timestamp: new Date().toISOString(),
+    version: process.env.npm_package_version || '1.0.0',
+    services,
+    uptime: Math.floor((Date.now() - startTime) / 1000),
+  };
 
-    return NextResponse.json(response, { status: statusCode });
-  } catch (error) {
-    logger.error(
-      'Health check failed',
-      error instanceof Error ? error : new Error(String(error))
-    );
+  healthLogger.debug('Health check completed', { status: overallStatus });
 
-    const errorResponse: HealthCheckResponse = {
-      status: 'unhealthy',
-      timestamp: new Date().toISOString(),
-      version: process.env.npm_package_version || '0.0.1',
-      services: [],
-      metrics: {
-        uptime: monitoring.getUptime(),
-        memoryUsage: {
-          heapUsed: 0,
-          heapTotal: 0,
-          external: 0,
-          rss: 0,
-        },
-        requestsPerMinute: 0,
-        errorRate: 100,
-      },
-    };
+  // Return appropriate HTTP status
+  const httpStatus = overallStatus === 'unhealthy' ? 503 :
+                     overallStatus === 'degraded' ? 200 :
+                     200;
 
-    return NextResponse.json(errorResponse, { status: 503 });
-  } finally {
-    clearRequestContext();
-  }
+  return NextResponse.json(response, { status: httpStatus });
 }

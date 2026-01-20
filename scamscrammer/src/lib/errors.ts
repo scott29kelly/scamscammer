@@ -1,96 +1,193 @@
 /**
  * Custom Error Classes and Error Handling Utilities
  *
- * This module provides a standardized approach to error handling across the application.
- * It includes custom error classes for different error types and utilities for
- * formatting error responses.
+ * This module provides custom error classes for different error categories
+ * and helper functions for error formatting and handling.
  */
-
-/**
- * Error codes for categorizing different types of errors
- */
-export const ErrorCodes = {
-  // Database errors
-  DATABASE_CONNECTION: 'DATABASE_CONNECTION',
-  DATABASE_QUERY: 'DATABASE_QUERY',
-  DATABASE_CONSTRAINT: 'DATABASE_CONSTRAINT',
-
-  // Twilio errors
-  TWILIO_API: 'TWILIO_API',
-  TWILIO_WEBHOOK: 'TWILIO_WEBHOOK',
-  TWILIO_RECORDING: 'TWILIO_RECORDING',
-
-  // OpenAI errors
-  OPENAI_API: 'OPENAI_API',
-  OPENAI_RATE_LIMIT: 'OPENAI_RATE_LIMIT',
-  OPENAI_CONTEXT_LENGTH: 'OPENAI_CONTEXT_LENGTH',
-
-  // Storage errors
-  STORAGE_UPLOAD: 'STORAGE_UPLOAD',
-  STORAGE_DOWNLOAD: 'STORAGE_DOWNLOAD',
-  STORAGE_NOT_FOUND: 'STORAGE_NOT_FOUND',
-
-  // Validation errors
-  VALIDATION_FAILED: 'VALIDATION_FAILED',
-  INVALID_INPUT: 'INVALID_INPUT',
-  MISSING_REQUIRED_FIELD: 'MISSING_REQUIRED_FIELD',
-
-  // Resource errors
-  NOT_FOUND: 'NOT_FOUND',
-  ALREADY_EXISTS: 'ALREADY_EXISTS',
-
-  // General errors
-  INTERNAL_ERROR: 'INTERNAL_ERROR',
-  EXTERNAL_SERVICE: 'EXTERNAL_SERVICE',
-  UNAUTHORIZED: 'UNAUTHORIZED',
-  FORBIDDEN: 'FORBIDDEN',
-} as const;
-
-export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];
 
 /**
  * Base application error class
- * All custom errors should extend this class
  */
 export class AppError extends Error {
-  public readonly code: ErrorCode;
+  public readonly code: string;
   public readonly statusCode: number;
   public readonly isOperational: boolean;
-  public readonly details?: Record<string, unknown>;
-  public readonly timestamp: Date;
-  public readonly requestId?: string;
+  public readonly context?: Record<string, unknown>;
 
   constructor(
     message: string,
-    code: ErrorCode = ErrorCodes.INTERNAL_ERROR,
+    code: string,
     statusCode: number = 500,
     isOperational: boolean = true,
-    details?: Record<string, unknown>
+    context?: Record<string, unknown>
   ) {
     super(message);
     this.name = this.constructor.name;
     this.code = code;
     this.statusCode = statusCode;
     this.isOperational = isOperational;
-    this.details = details;
-    this.timestamp = new Date();
+    this.context = context;
+    Error.captureStackTrace(this, this.constructor);
+  }
+}
 
-    // Maintains proper stack trace for where our error was thrown (only available on V8)
-    if (Error.captureStackTrace) {
-      Error.captureStackTrace(this, this.constructor);
-    }
+/**
+ * Twilio-related errors
+ */
+export class TwilioError extends AppError {
+  constructor(
+    message: string,
+    code: string = 'TWILIO_ERROR',
+    statusCode: number = 500,
+    context?: Record<string, unknown>
+  ) {
+    super(message, code, statusCode, true, context);
   }
 
-  /**
-   * Convert error to API response format
-   */
-  toJSON() {
-    return {
-      error: this.message,
-      code: this.code,
-      details: this.details,
-      ...(this.requestId && { requestId: this.requestId }),
-    };
+  static signatureValidationFailed(): TwilioError {
+    return new TwilioError(
+      'Twilio signature validation failed',
+      'TWILIO_SIGNATURE_INVALID',
+      401
+    );
+  }
+
+  static callNotFound(callSid: string): TwilioError {
+    return new TwilioError(
+      `Call not found: ${callSid}`,
+      'TWILIO_CALL_NOT_FOUND',
+      404,
+      { callSid }
+    );
+  }
+
+  static webhookError(operation: string, details?: string): TwilioError {
+    return new TwilioError(
+      `Twilio webhook error during ${operation}${details ? `: ${details}` : ''}`,
+      'TWILIO_WEBHOOK_ERROR',
+      500,
+      { operation }
+    );
+  }
+
+  static connectionFailed(details?: string): TwilioError {
+    return new TwilioError(
+      `Failed to connect to Twilio${details ? `: ${details}` : ''}`,
+      'TWILIO_CONNECTION_FAILED',
+      503
+    );
+  }
+}
+
+/**
+ * OpenAI-related errors
+ */
+export class OpenAIError extends AppError {
+  constructor(
+    message: string,
+    code: string = 'OPENAI_ERROR',
+    statusCode: number = 500,
+    context?: Record<string, unknown>
+  ) {
+    super(message, code, statusCode, true, context);
+  }
+
+  static connectionFailed(details?: string): OpenAIError {
+    return new OpenAIError(
+      `Failed to connect to OpenAI Realtime API${details ? `: ${details}` : ''}`,
+      'OPENAI_CONNECTION_FAILED',
+      503
+    );
+  }
+
+  static sessionError(details?: string): OpenAIError {
+    return new OpenAIError(
+      `OpenAI session error${details ? `: ${details}` : ''}`,
+      'OPENAI_SESSION_ERROR',
+      500
+    );
+  }
+
+  static audioStreamError(details?: string): OpenAIError {
+    return new OpenAIError(
+      `Audio stream error${details ? `: ${details}` : ''}`,
+      'OPENAI_AUDIO_ERROR',
+      500
+    );
+  }
+
+  static rateLimitExceeded(): OpenAIError {
+    return new OpenAIError(
+      'OpenAI rate limit exceeded',
+      'OPENAI_RATE_LIMITED',
+      429
+    );
+  }
+
+  static invalidResponse(details?: string): OpenAIError {
+    return new OpenAIError(
+      `Invalid response from OpenAI${details ? `: ${details}` : ''}`,
+      'OPENAI_INVALID_RESPONSE',
+      502
+    );
+  }
+}
+
+/**
+ * Storage-related errors (S3)
+ */
+export class StorageError extends AppError {
+  constructor(
+    message: string,
+    code: string = 'STORAGE_ERROR',
+    statusCode: number = 500,
+    context?: Record<string, unknown>
+  ) {
+    super(message, code, statusCode, true, context);
+  }
+
+  static uploadFailed(key: string, details?: string): StorageError {
+    return new StorageError(
+      `Failed to upload file${details ? `: ${details}` : ''}`,
+      'STORAGE_UPLOAD_FAILED',
+      500,
+      { key }
+    );
+  }
+
+  static downloadFailed(key: string, details?: string): StorageError {
+    return new StorageError(
+      `Failed to download file${details ? `: ${details}` : ''}`,
+      'STORAGE_DOWNLOAD_FAILED',
+      500,
+      { key }
+    );
+  }
+
+  static deleteFailed(key: string, details?: string): StorageError {
+    return new StorageError(
+      `Failed to delete file${details ? `: ${details}` : ''}`,
+      'STORAGE_DELETE_FAILED',
+      500,
+      { key }
+    );
+  }
+
+  static fileNotFound(key: string): StorageError {
+    return new StorageError(
+      `File not found: ${key}`,
+      'STORAGE_FILE_NOT_FOUND',
+      404,
+      { key }
+    );
+  }
+
+  static bucketNotConfigured(): StorageError {
+    return new StorageError(
+      'Storage bucket not configured',
+      'STORAGE_BUCKET_NOT_CONFIGURED',
+      500
+    );
   }
 }
 
@@ -100,215 +197,172 @@ export class AppError extends Error {
 export class DatabaseError extends AppError {
   constructor(
     message: string,
-    code: ErrorCode = ErrorCodes.DATABASE_QUERY,
-    details?: Record<string, unknown>
+    code: string = 'DATABASE_ERROR',
+    statusCode: number = 500,
+    context?: Record<string, unknown>
   ) {
-    super(message, code, 500, true, details);
+    super(message, code, statusCode, true, context);
+  }
+
+  static connectionFailed(details?: string): DatabaseError {
+    return new DatabaseError(
+      `Database connection failed${details ? `: ${details}` : ''}`,
+      'DATABASE_CONNECTION_FAILED',
+      503
+    );
+  }
+
+  static queryFailed(operation: string, details?: string): DatabaseError {
+    return new DatabaseError(
+      `Database query failed during ${operation}${details ? `: ${details}` : ''}`,
+      'DATABASE_QUERY_FAILED',
+      500,
+      { operation }
+    );
+  }
+
+  static recordNotFound(entity: string, id: string): DatabaseError {
+    return new DatabaseError(
+      `${entity} not found: ${id}`,
+      'DATABASE_RECORD_NOT_FOUND',
+      404,
+      { entity, id }
+    );
+  }
+
+  static duplicateRecord(entity: string, field: string): DatabaseError {
+    return new DatabaseError(
+      `Duplicate ${entity} on field: ${field}`,
+      'DATABASE_DUPLICATE_RECORD',
+      409,
+      { entity, field }
+    );
   }
 }
 
 /**
- * Twilio API errors
- */
-export class TwilioError extends AppError {
-  public readonly twilioErrorCode?: number;
-
-  constructor(
-    message: string,
-    code: ErrorCode = ErrorCodes.TWILIO_API,
-    twilioErrorCode?: number,
-    details?: Record<string, unknown>
-  ) {
-    super(message, code, 502, true, details);
-    this.twilioErrorCode = twilioErrorCode;
-  }
-}
-
-/**
- * OpenAI API errors
- */
-export class OpenAIError extends AppError {
-  constructor(
-    message: string,
-    code: ErrorCode = ErrorCodes.OPENAI_API,
-    details?: Record<string, unknown>
-  ) {
-    super(message, code, 502, true, details);
-  }
-}
-
-/**
- * Storage (S3) errors
- */
-export class StorageError extends AppError {
-  constructor(
-    message: string,
-    code: ErrorCode = ErrorCodes.STORAGE_UPLOAD,
-    details?: Record<string, unknown>
-  ) {
-    super(message, code, 500, true, details);
-  }
-}
-
-/**
- * Validation errors (for invalid input)
+ * Validation errors
  */
 export class ValidationError extends AppError {
-  public readonly fieldErrors?: Record<string, string>;
+  public readonly fields?: Record<string, string>;
 
   constructor(
     message: string,
-    fieldErrors?: Record<string, string>,
-    details?: Record<string, unknown>
+    fields?: Record<string, string>,
+    context?: Record<string, unknown>
   ) {
-    super(message, ErrorCodes.VALIDATION_FAILED, 400, true, details);
-    this.fieldErrors = fieldErrors;
+    super(message, 'VALIDATION_ERROR', 400, true, context);
+    this.fields = fields;
   }
 
-  toJSON() {
-    return {
-      ...super.toJSON(),
-      ...(this.fieldErrors && { fieldErrors: this.fieldErrors }),
-    };
-  }
-}
-
-/**
- * Not found errors
- */
-export class NotFoundError extends AppError {
-  constructor(resource: string, identifier?: string) {
-    const message = identifier
-      ? `${resource} with id '${identifier}' not found`
-      : `${resource} not found`;
-    super(message, ErrorCodes.NOT_FOUND, 404, true, {
-      resource,
-      ...(identifier && { identifier }),
-    });
-  }
-}
-
-/**
- * External service errors (generic)
- */
-export class ExternalServiceError extends AppError {
-  public readonly serviceName: string;
-
-  constructor(
-    serviceName: string,
-    message: string,
-    details?: Record<string, unknown>
-  ) {
-    super(
-      `External service error (${serviceName}): ${message}`,
-      ErrorCodes.EXTERNAL_SERVICE,
-      502,
-      true,
-      details
+  static requiredField(field: string): ValidationError {
+    return new ValidationError(
+      `Missing required field: ${field}`,
+      { [field]: 'Required' }
     );
-    this.serviceName = serviceName;
+  }
+
+  static invalidFormat(field: string, expected: string): ValidationError {
+    return new ValidationError(
+      `Invalid format for field: ${field}. Expected: ${expected}`,
+      { [field]: `Expected ${expected}` }
+    );
+  }
+
+  static invalidValue(field: string, message: string): ValidationError {
+    return new ValidationError(
+      `Invalid value for field: ${field}. ${message}`,
+      { [field]: message }
+    );
   }
 }
 
 /**
- * Type guard to check if an error is an AppError
+ * Format an error for API response (safe for clients)
  */
-export function isAppError(error: unknown): error is AppError {
-  return error instanceof AppError;
-}
-
-/**
- * Type guard to check if an error is an operational error
- * (vs a programming error)
- */
-export function isOperationalError(error: unknown): boolean {
-  if (isAppError(error)) {
-    return error.isOperational;
-  }
-  return false;
-}
-
-/**
- * Format any error to a safe API response
- * Hides implementation details for non-operational errors in production
- */
-export function formatErrorResponse(
-  error: unknown,
-  requestId?: string
-): {
+export function formatErrorResponse(error: unknown): {
   error: string;
-  code: ErrorCode;
-  details?: Record<string, unknown>;
-  requestId?: string;
+  code?: string;
+  details?: Record<string, string>;
 } {
-  if (isAppError(error)) {
-    return {
-      ...error.toJSON(),
-      requestId,
+  if (error instanceof AppError) {
+    const response: {
+      error: string;
+      code?: string;
+      details?: Record<string, string>;
+    } = {
+      error: error.message,
+      code: error.code,
     };
+
+    if (error instanceof ValidationError && error.fields) {
+      response.details = error.fields;
+    }
+
+    return response;
   }
 
-  // For unexpected errors, hide details in production
-  const isDev = process.env.NODE_ENV === 'development';
-
+  // For unknown errors, return a generic message (don't expose internals)
   return {
-    error: isDev && error instanceof Error ? error.message : 'An unexpected error occurred',
-    code: ErrorCodes.INTERNAL_ERROR,
-    ...(isDev && error instanceof Error && { details: { stack: error.stack } }),
-    requestId,
+    error: 'An unexpected error occurred',
+    code: 'INTERNAL_ERROR',
   };
 }
 
 /**
- * Get HTTP status code from an error
+ * Get HTTP status code from error
  */
 export function getErrorStatusCode(error: unknown): number {
-  if (isAppError(error)) {
+  if (error instanceof AppError) {
     return error.statusCode;
   }
   return 500;
 }
 
 /**
- * Wrap a Prisma error into an AppError
+ * Check if error is operational (expected) vs programmer error
  */
-export function wrapPrismaError(error: unknown): DatabaseError {
-  const prismaError = error as {
-    code?: string;
-    meta?: Record<string, unknown>;
-    message?: string;
+export function isOperationalError(error: unknown): boolean {
+  if (error instanceof AppError) {
+    return error.isOperational;
+  }
+  return false;
+}
+
+/**
+ * Extract error message safely
+ */
+export function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === 'string') {
+    return error;
+  }
+  return 'Unknown error';
+}
+
+/**
+ * Extract error context for logging
+ */
+export function getErrorContext(error: unknown): Record<string, unknown> {
+  const context: Record<string, unknown> = {
+    name: error instanceof Error ? error.name : 'Unknown',
+    message: getErrorMessage(error),
+    stack: error instanceof Error ? error.stack : undefined,
   };
 
-  // Handle common Prisma error codes
-  const prismaCode = prismaError.code;
-
-  if (prismaCode === 'P2002') {
-    return new DatabaseError(
-      'A record with this unique identifier already exists',
-      ErrorCodes.DATABASE_CONSTRAINT,
-      { prismaCode, meta: prismaError.meta }
-    );
+  if (error instanceof AppError) {
+    context.code = error.code;
+    context.statusCode = error.statusCode;
+    context.isOperational = error.isOperational;
+    if (error.context) {
+      context.errorContext = error.context;
+    }
+    if (error instanceof ValidationError && error.fields) {
+      context.validationFields = error.fields;
+    }
   }
 
-  if (prismaCode === 'P2025') {
-    return new DatabaseError(
-      'The requested record was not found',
-      ErrorCodes.DATABASE_QUERY,
-      { prismaCode, meta: prismaError.meta }
-    );
-  }
-
-  if (prismaCode?.startsWith('P1')) {
-    return new DatabaseError(
-      'Database connection error',
-      ErrorCodes.DATABASE_CONNECTION,
-      { prismaCode, meta: prismaError.meta }
-    );
-  }
-
-  return new DatabaseError(
-    prismaError.message || 'Database operation failed',
-    ErrorCodes.DATABASE_QUERY,
-    { prismaCode, meta: prismaError.meta }
-  );
+  return context;
 }

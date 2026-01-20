@@ -90,3 +90,25 @@ export interface StorageDeleteResult {
   success: boolean;
   key?: string;
 }
+
+/**
+ * Health check response
+ */
+export interface ServiceStatus {
+  status: 'healthy' | 'unhealthy' | 'degraded';
+  latency?: number;
+  message?: string;
+}
+
+export interface HealthResponse {
+  status: 'healthy' | 'unhealthy' | 'degraded';
+  timestamp: string;
+  version: string;
+  services: {
+    database: ServiceStatus;
+    twilio: ServiceStatus;
+    openai: ServiceStatus;
+    storage: ServiceStatus;
+  };
+  uptime: number;
+}

@@ -8,32 +8,12 @@ import { NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import type { DashboardStats, ApiErrorResponse, CallListItem } from '@/types';
 import { CallStatus } from '@prisma/client';
-import {
-  logger,
-  generateRequestId,
-  setRequestContext,
-  clearRequestContext,
-} from '@/lib/logger';
-import {
-  DatabaseError,
-  wrapPrismaError,
-  formatErrorResponse,
-  getErrorStatusCode,
-} from '@/lib/errors';
-import { monitoring, trackDatabaseQuery, createRequestMonitoring } from '@/lib/monitoring';
+import { apiLogger } from '@/lib/logger';
+import { DatabaseError, formatErrorResponse, getErrorStatusCode } from '@/lib/errors';
 
 export async function GET(): Promise<NextResponse<DashboardStats | ApiErrorResponse>> {
-  const requestId = generateRequestId();
-  setRequestContext({
-    requestId,
-    method: 'GET',
-    path: '/api/stats',
-    startTime: Date.now(),
-  });
-
-  const requestMonitoring = createRequestMonitoring('GET', '/api/stats');
-
-  logger.info('Fetching dashboard statistics');
+  const requestLogger = apiLogger.forRequest(`stats-${Date.now()}`);
+  requestLogger.debug('Fetching dashboard statistics');
 
   try {
     // Get the date 30 days ago for the callsByDay chart
@@ -185,19 +165,21 @@ export async function GET(): Promise<NextResponse<DashboardStats | ApiErrorRespo
       longestCalls: longestCalls.map(mapToCallListItem),
     };
 
-    logger.info('Dashboard statistics fetched successfully', {
-      totalCalls: stats.totalCalls,
+    requestLogger.info('Dashboard statistics fetched successfully', {
+      totalCalls,
       totalDuration: stats.totalDuration,
     });
 
-    requestMonitoring.recordSuccess();
-
     return NextResponse.json(stats);
   } catch (error) {
-    logger.error(
-      'Failed to fetch statistics',
-      error instanceof Error ? error : new Error(String(error)),
-      { requestId }
+    const dbError = DatabaseError.queryFailed('stats aggregation');
+    requestLogger.logError(error, 'Failed to fetch dashboard statistics', {
+      originalError: error instanceof Error ? error.message : String(error),
+    });
+
+    return NextResponse.json(
+      formatErrorResponse(dbError),
+      { status: getErrorStatusCode(dbError) }
     );
 
     requestMonitoring.recordError();

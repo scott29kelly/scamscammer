@@ -1,224 +1,250 @@
 /**
- * Tests for the logging service
+ * Tests for logging utility
  */
 
-import {
-  logger,
-  createLogger,
-  LogLevel,
-  generateRequestId,
-  setRequestContext,
-  clearRequestContext,
-  getRequestContext,
-  withRequestLogging,
-} from '../logger';
+import { Logger, logger, twilioLogger, openaiLogger, storageLogger, databaseLogger, apiLogger } from '../logger';
 
 describe('Logger', () => {
   let consoleSpy: {
     log: jest.SpyInstance;
-    warn: jest.SpyInstance;
     error: jest.SpyInstance;
+    warn: jest.SpyInstance;
+    debug: jest.SpyInstance;
   };
 
   beforeEach(() => {
-    // Spy on console methods
     consoleSpy = {
       log: jest.spyOn(console, 'log').mockImplementation(),
-      warn: jest.spyOn(console, 'warn').mockImplementation(),
       error: jest.spyOn(console, 'error').mockImplementation(),
+      warn: jest.spyOn(console, 'warn').mockImplementation(),
+      debug: jest.spyOn(console, 'debug').mockImplementation(),
     };
-
-    // Clear request context before each test
-    clearRequestContext();
   });
 
   afterEach(() => {
-    // Restore console methods
-    consoleSpy.log.mockRestore();
-    consoleSpy.warn.mockRestore();
-    consoleSpy.error.mockRestore();
+    jest.restoreAllMocks();
   });
 
-  describe('generateRequestId', () => {
-    it('should generate a valid UUID', () => {
-      const requestId = generateRequestId();
-
-      expect(requestId).toMatch(
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
-      );
-    });
-
-    it('should generate unique IDs', () => {
-      const id1 = generateRequestId();
-      const id2 = generateRequestId();
-
-      expect(id1).not.toBe(id2);
-    });
-  });
-
-  describe('Request Context', () => {
-    it('should set and get request context', () => {
-      const context = {
-        requestId: 'test-123',
-        method: 'GET',
-        path: '/api/test',
-        startTime: Date.now(),
-      };
-
-      setRequestContext(context);
-
-      expect(getRequestContext()).toEqual(context);
-    });
-
-    it('should clear request context', () => {
-      setRequestContext({
-        requestId: 'test-123',
-        method: 'GET',
-        path: '/api/test',
-      });
-
-      clearRequestContext();
-
-      expect(getRequestContext()).toBeNull();
-    });
-  });
-
-  describe('Logger methods', () => {
-    it('should call debug method without throwing', () => {
-      // Debug level may or may not be logged depending on minLevel config
-      // This test verifies the method works without errors
-      expect(() => {
-        logger.debug('Debug message', { key: 'value' });
-      }).not.toThrow();
-    });
-
+  describe('log levels', () => {
     it('should log info messages', () => {
-      logger.info('Info message', { key: 'value' });
+      const testLogger = new Logger({ minLevel: 'debug', prettyPrint: false });
+      testLogger.info('Test info message');
 
-      expect(consoleSpy.log).toHaveBeenCalled();
+      expect(consoleSpy.log).toHaveBeenCalledTimes(1);
+      const loggedData = JSON.parse(consoleSpy.log.mock.calls[0][0]);
+      expect(loggedData.level).toBe('info');
+      expect(loggedData.message).toBe('Test info message');
     });
 
-    it('should log warning messages', () => {
-      logger.warn('Warning message', { key: 'value' });
+    it('should log error messages with console.error', () => {
+      const testLogger = new Logger({ minLevel: 'debug', prettyPrint: false });
+      testLogger.error('Test error message');
 
-      expect(consoleSpy.warn).toHaveBeenCalled();
+      expect(consoleSpy.error).toHaveBeenCalledTimes(1);
+      const loggedData = JSON.parse(consoleSpy.error.mock.calls[0][0]);
+      expect(loggedData.level).toBe('error');
+      expect(loggedData.message).toBe('Test error message');
     });
 
-    it('should log error messages', () => {
+    it('should log warn messages with console.warn', () => {
+      const testLogger = new Logger({ minLevel: 'debug', prettyPrint: false });
+      testLogger.warn('Test warning message');
+
+      expect(consoleSpy.warn).toHaveBeenCalledTimes(1);
+      const loggedData = JSON.parse(consoleSpy.warn.mock.calls[0][0]);
+      expect(loggedData.level).toBe('warn');
+      expect(loggedData.message).toBe('Test warning message');
+    });
+
+    it('should log debug messages with console.debug', () => {
+      const testLogger = new Logger({ minLevel: 'debug', prettyPrint: false });
+      testLogger.debug('Test debug message');
+
+      expect(consoleSpy.debug).toHaveBeenCalledTimes(1);
+      const loggedData = JSON.parse(consoleSpy.debug.mock.calls[0][0]);
+      expect(loggedData.level).toBe('debug');
+      expect(loggedData.message).toBe('Test debug message');
+    });
+  });
+
+  describe('log filtering', () => {
+    it('should filter out debug when minLevel is info', () => {
+      const testLogger = new Logger({ minLevel: 'info', prettyPrint: false });
+      testLogger.debug('Debug message');
+      testLogger.info('Info message');
+
+      expect(consoleSpy.debug).not.toHaveBeenCalled();
+      expect(consoleSpy.log).toHaveBeenCalledTimes(1);
+    });
+
+    it('should filter out info and debug when minLevel is warn', () => {
+      const testLogger = new Logger({ minLevel: 'warn', prettyPrint: false });
+      testLogger.debug('Debug message');
+      testLogger.info('Info message');
+      testLogger.warn('Warn message');
+
+      expect(consoleSpy.debug).not.toHaveBeenCalled();
+      expect(consoleSpy.log).not.toHaveBeenCalled();
+      expect(consoleSpy.warn).toHaveBeenCalledTimes(1);
+    });
+
+    it('should only log errors when minLevel is error', () => {
+      const testLogger = new Logger({ minLevel: 'error', prettyPrint: false });
+      testLogger.debug('Debug message');
+      testLogger.info('Info message');
+      testLogger.warn('Warn message');
+      testLogger.error('Error message');
+
+      expect(consoleSpy.debug).not.toHaveBeenCalled();
+      expect(consoleSpy.log).not.toHaveBeenCalled();
+      expect(consoleSpy.warn).not.toHaveBeenCalled();
+      expect(consoleSpy.error).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('context', () => {
+    it('should include context in log entry', () => {
+      const testLogger = new Logger({ minLevel: 'debug', prettyPrint: false });
+      testLogger.info('Test message', { userId: '123', action: 'login' });
+
+      const loggedData = JSON.parse(consoleSpy.log.mock.calls[0][0]);
+      expect(loggedData.context).toEqual({ userId: '123', action: 'login' });
+    });
+
+    it('should merge default context with call context', () => {
+      const testLogger = new Logger({ minLevel: 'debug', prettyPrint: false }, { service: 'test' });
+      testLogger.info('Test message', { action: 'login' });
+
+      const loggedData = JSON.parse(consoleSpy.log.mock.calls[0][0]);
+      expect(loggedData.context).toEqual({ service: 'test', action: 'login' });
+    });
+
+    it('should not include empty context', () => {
+      const testLogger = new Logger({ minLevel: 'debug', prettyPrint: false });
+      testLogger.info('Test message');
+
+      const loggedData = JSON.parse(consoleSpy.log.mock.calls[0][0]);
+      expect(loggedData.context).toBeUndefined();
+    });
+  });
+
+  describe('child loggers', () => {
+    it('should create child logger with additional context', () => {
+      const parentLogger = new Logger({ minLevel: 'debug', prettyPrint: false }, { service: 'parent' });
+      const childLogger = parentLogger.child({ requestId: 'req-123' });
+
+      childLogger.info('Child message');
+
+      const loggedData = JSON.parse(consoleSpy.log.mock.calls[0][0]);
+      expect(loggedData.context).toEqual({ service: 'parent', requestId: 'req-123' });
+    });
+
+    it('should create request logger with requestId', () => {
+      const testLogger = new Logger({ minLevel: 'debug', prettyPrint: false });
+      const requestLogger = testLogger.forRequest('req-456');
+
+      requestLogger.info('Request message');
+
+      const loggedData = JSON.parse(consoleSpy.log.mock.calls[0][0]);
+      expect(loggedData.context?.requestId).toBe('req-456');
+    });
+
+    it('should create service logger with service name', () => {
+      const testLogger = new Logger({ minLevel: 'debug', prettyPrint: false });
+      const serviceLogger = testLogger.forService('auth');
+
+      serviceLogger.info('Service message');
+
+      const loggedData = JSON.parse(consoleSpy.log.mock.calls[0][0]);
+      expect(loggedData.context?.service).toBe('auth');
+    });
+  });
+
+  describe('error logging', () => {
+    it('should include error details', () => {
+      const testLogger = new Logger({ minLevel: 'debug', prettyPrint: false });
       const error = new Error('Test error');
-      logger.error('Error message', error, { key: 'value' });
+      testLogger.error('An error occurred', { operation: 'test' }, error);
 
-      expect(consoleSpy.error).toHaveBeenCalled();
+      const loggedData = JSON.parse(consoleSpy.error.mock.calls[0][0]);
+      expect(loggedData.error).toBeDefined();
+      expect(loggedData.error.name).toBe('Error');
+      expect(loggedData.error.message).toBe('Test error');
+      expect(loggedData.error.stack).toBeDefined();
     });
 
-    it('should include request ID in logs when context is set', () => {
-      setRequestContext({
-        requestId: 'req-abc123',
-        method: 'GET',
-        path: '/api/test',
-        startTime: Date.now(),
-      });
+    it('should handle logError with Error object', () => {
+      const testLogger = new Logger({ minLevel: 'debug', prettyPrint: false });
+      const error = new Error('Something went wrong');
+      testLogger.logError(error, 'Operation failed');
 
-      logger.info('Test message');
-
-      expect(consoleSpy.log).toHaveBeenCalled();
-      const logOutput = consoleSpy.log.mock.calls[0][0];
-      expect(logOutput).toContain('req-abc1'); // First 8 chars in pretty format
-    });
-  });
-
-  describe('createLogger', () => {
-    it('should create a child logger with component context', () => {
-      const childLogger = createLogger('database');
-
-      childLogger.info('Database connected');
-
-      expect(consoleSpy.log).toHaveBeenCalled();
-      const logOutput = consoleSpy.log.mock.calls[0][0];
-      expect(logOutput).toContain('database');
+      const loggedData = JSON.parse(consoleSpy.error.mock.calls[0][0]);
+      expect(loggedData.message).toBe('Operation failed');
+      expect(loggedData.error.message).toBe('Something went wrong');
     });
 
-    it('should merge context from child and call', () => {
-      const childLogger = createLogger('api');
+    it('should handle logError with non-Error', () => {
+      const testLogger = new Logger({ minLevel: 'debug', prettyPrint: false });
+      testLogger.logError('String error');
 
-      childLogger.info('Request received', { endpoint: '/health' });
+      const loggedData = JSON.parse(consoleSpy.error.mock.calls[0][0]);
+      expect(loggedData.error.message).toBe('String error');
+    });
 
-      expect(consoleSpy.log).toHaveBeenCalled();
-      const logOutput = consoleSpy.log.mock.calls[0][0];
-      expect(logOutput).toContain('api');
-      expect(logOutput).toContain('/health');
+    it('should use error message when no message provided', () => {
+      const testLogger = new Logger({ minLevel: 'debug', prettyPrint: false });
+      const error = new Error('Error message as log message');
+      testLogger.logError(error);
+
+      const loggedData = JSON.parse(consoleSpy.error.mock.calls[0][0]);
+      expect(loggedData.message).toBe('Error message as log message');
     });
   });
 
-  describe('withRequestLogging', () => {
-    it('should wrap async function with request context', async () => {
-      const result = await withRequestLogging('GET', '/api/test', async () => {
-        return 'success';
-      });
+  describe('pretty print mode', () => {
+    it('should output human-readable format', () => {
+      const testLogger = new Logger({ minLevel: 'debug', prettyPrint: true });
+      testLogger.info('Test message', { key: 'value' });
 
-      expect(result).toBe('success');
-      // Info logged for start and completion
-      expect(consoleSpy.log).toHaveBeenCalledTimes(2);
-    });
-
-    it('should log errors and rethrow', async () => {
-      const testError = new Error('Test error');
-
-      await expect(
-        withRequestLogging('POST', '/api/test', async () => {
-          throw testError;
-        })
-      ).rejects.toThrow('Test error');
-
-      expect(consoleSpy.error).toHaveBeenCalled();
-    });
-
-    it('should clear request context after completion', async () => {
-      await withRequestLogging('GET', '/api/test', async () => {
-        expect(getRequestContext()).not.toBeNull();
-        return 'done';
-      });
-
-      expect(getRequestContext()).toBeNull();
-    });
-
-    it('should clear request context after error', async () => {
-      try {
-        await withRequestLogging('GET', '/api/test', async () => {
-          throw new Error('test');
-        });
-      } catch {
-        // Expected
-      }
-
-      expect(getRequestContext()).toBeNull();
+      expect(consoleSpy.log).toHaveBeenCalledTimes(1);
+      const output = consoleSpy.log.mock.calls[0][0];
+      expect(output).toContain('INFO');
+      expect(output).toContain('Test message');
+      expect(output).toContain('Context:');
+      expect(output).toContain('key');
     });
   });
-});
 
-describe('Logger in production mode', () => {
-  const originalEnv = process.env.NODE_ENV;
+  describe('timestamp', () => {
+    it('should include timestamp by default', () => {
+      const testLogger = new Logger({ minLevel: 'debug', prettyPrint: false });
+      testLogger.info('Test');
 
-  beforeAll(() => {
-    process.env.NODE_ENV = 'production';
+      const loggedData = JSON.parse(consoleSpy.log.mock.calls[0][0]);
+      expect(loggedData.timestamp).toBeDefined();
+      expect(new Date(loggedData.timestamp).getTime()).not.toBeNaN();
+    });
+
+    it('should exclude timestamp when configured', () => {
+      const testLogger = new Logger({ minLevel: 'debug', prettyPrint: false, includeTimestamp: false });
+      testLogger.info('Test');
+
+      const loggedData = JSON.parse(consoleSpy.log.mock.calls[0][0]);
+      expect(loggedData.timestamp).toBe('');
+    });
   });
 
-  afterAll(() => {
-    process.env.NODE_ENV = originalEnv;
-  });
+  describe('pre-configured loggers', () => {
+    it('should have service-specific loggers', () => {
+      expect(twilioLogger).toBeInstanceOf(Logger);
+      expect(openaiLogger).toBeInstanceOf(Logger);
+      expect(storageLogger).toBeInstanceOf(Logger);
+      expect(databaseLogger).toBeInstanceOf(Logger);
+      expect(apiLogger).toBeInstanceOf(Logger);
+    });
 
-  it('should output JSON in production', () => {
-    const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
-
-    logger.info('Production message');
-
-    // In production, output should be JSON
-    const output = consoleSpy.mock.calls[0]?.[0];
-    if (output) {
-      // Should be valid JSON
-      expect(() => JSON.parse(output)).not.toThrow();
-    }
-
-    consoleSpy.mockRestore();
+    it('should have default logger', () => {
+      expect(logger).toBeInstanceOf(Logger);
+    });
   });
 });

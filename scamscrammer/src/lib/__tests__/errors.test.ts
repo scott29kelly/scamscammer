@@ -1,306 +1,337 @@
 /**
- * Tests for custom error classes and error utilities
+ * Tests for custom error classes and error handling utilities
  */
 
 import {
   AppError,
-  DatabaseError,
   TwilioError,
   OpenAIError,
   StorageError,
+  DatabaseError,
   ValidationError,
-  NotFoundError,
-  ExternalServiceError,
-  ErrorCodes,
-  isAppError,
-  isOperationalError,
   formatErrorResponse,
   getErrorStatusCode,
-  wrapPrismaError,
+  isOperationalError,
+  getErrorMessage,
+  getErrorContext,
 } from '../errors';
 
-describe('Custom Error Classes', () => {
-  describe('AppError', () => {
-    it('should create an error with default values', () => {
-      const error = new AppError('Test error');
+describe('AppError', () => {
+  it('should create an error with all properties', () => {
+    const error = new AppError('Test error', 'TEST_ERROR', 400, true, { foo: 'bar' });
 
-      expect(error.message).toBe('Test error');
-      expect(error.code).toBe(ErrorCodes.INTERNAL_ERROR);
-      expect(error.statusCode).toBe(500);
-      expect(error.isOperational).toBe(true);
-      expect(error.details).toBeUndefined();
-      expect(error.timestamp).toBeInstanceOf(Date);
-      expect(error.name).toBe('AppError');
-    });
+    expect(error.message).toBe('Test error');
+    expect(error.code).toBe('TEST_ERROR');
+    expect(error.statusCode).toBe(400);
+    expect(error.isOperational).toBe(true);
+    expect(error.context).toEqual({ foo: 'bar' });
+    expect(error.name).toBe('AppError');
+  });
 
-    it('should create an error with custom values', () => {
-      const error = new AppError(
-        'Custom error',
-        ErrorCodes.VALIDATION_FAILED,
-        400,
-        true,
-        { field: 'email' }
-      );
+  it('should use default values', () => {
+    const error = new AppError('Test', 'TEST');
 
-      expect(error.message).toBe('Custom error');
-      expect(error.code).toBe(ErrorCodes.VALIDATION_FAILED);
-      expect(error.statusCode).toBe(400);
-      expect(error.details).toEqual({ field: 'email' });
-    });
+    expect(error.statusCode).toBe(500);
+    expect(error.isOperational).toBe(true);
+    expect(error.context).toBeUndefined();
+  });
+});
 
-    it('should convert to JSON correctly', () => {
-      const error = new AppError('Test error', ErrorCodes.NOT_FOUND, 404, true, {
-        resource: 'user',
-      });
+describe('TwilioError', () => {
+  it('should create signature validation failed error', () => {
+    const error = TwilioError.signatureValidationFailed();
 
-      const json = error.toJSON();
+    expect(error.message).toBe('Twilio signature validation failed');
+    expect(error.code).toBe('TWILIO_SIGNATURE_INVALID');
+    expect(error.statusCode).toBe(401);
+  });
 
-      expect(json).toEqual({
-        error: 'Test error',
-        code: ErrorCodes.NOT_FOUND,
-        details: { resource: 'user' },
-      });
+  it('should create call not found error', () => {
+    const error = TwilioError.callNotFound('CA123');
+
+    expect(error.message).toBe('Call not found: CA123');
+    expect(error.code).toBe('TWILIO_CALL_NOT_FOUND');
+    expect(error.statusCode).toBe(404);
+    expect(error.context).toEqual({ callSid: 'CA123' });
+  });
+
+  it('should create webhook error', () => {
+    const error = TwilioError.webhookError('status update', 'Invalid payload');
+
+    expect(error.message).toBe('Twilio webhook error during status update: Invalid payload');
+    expect(error.code).toBe('TWILIO_WEBHOOK_ERROR');
+    expect(error.statusCode).toBe(500);
+  });
+
+  it('should create connection failed error', () => {
+    const error = TwilioError.connectionFailed('Timeout');
+
+    expect(error.message).toBe('Failed to connect to Twilio: Timeout');
+    expect(error.code).toBe('TWILIO_CONNECTION_FAILED');
+    expect(error.statusCode).toBe(503);
+  });
+});
+
+describe('OpenAIError', () => {
+  it('should create connection failed error', () => {
+    const error = OpenAIError.connectionFailed('WebSocket closed');
+
+    expect(error.message).toBe('Failed to connect to OpenAI Realtime API: WebSocket closed');
+    expect(error.code).toBe('OPENAI_CONNECTION_FAILED');
+    expect(error.statusCode).toBe(503);
+  });
+
+  it('should create session error', () => {
+    const error = OpenAIError.sessionError();
+
+    expect(error.message).toBe('OpenAI session error');
+    expect(error.code).toBe('OPENAI_SESSION_ERROR');
+    expect(error.statusCode).toBe(500);
+  });
+
+  it('should create audio stream error', () => {
+    const error = OpenAIError.audioStreamError('Buffer overflow');
+
+    expect(error.message).toBe('Audio stream error: Buffer overflow');
+    expect(error.code).toBe('OPENAI_AUDIO_ERROR');
+  });
+
+  it('should create rate limit error', () => {
+    const error = OpenAIError.rateLimitExceeded();
+
+    expect(error.message).toBe('OpenAI rate limit exceeded');
+    expect(error.code).toBe('OPENAI_RATE_LIMITED');
+    expect(error.statusCode).toBe(429);
+  });
+
+  it('should create invalid response error', () => {
+    const error = OpenAIError.invalidResponse('Malformed JSON');
+
+    expect(error.message).toBe('Invalid response from OpenAI: Malformed JSON');
+    expect(error.code).toBe('OPENAI_INVALID_RESPONSE');
+    expect(error.statusCode).toBe(502);
+  });
+});
+
+describe('StorageError', () => {
+  it('should create upload failed error', () => {
+    const error = StorageError.uploadFailed('recordings/call-123.wav', 'S3 timeout');
+
+    expect(error.message).toBe('Failed to upload file: S3 timeout');
+    expect(error.code).toBe('STORAGE_UPLOAD_FAILED');
+    expect(error.context).toEqual({ key: 'recordings/call-123.wav' });
+  });
+
+  it('should create download failed error', () => {
+    const error = StorageError.downloadFailed('recordings/call-123.wav');
+
+    expect(error.message).toBe('Failed to download file');
+    expect(error.code).toBe('STORAGE_DOWNLOAD_FAILED');
+  });
+
+  it('should create delete failed error', () => {
+    const error = StorageError.deleteFailed('recordings/call-123.wav', 'Access denied');
+
+    expect(error.message).toBe('Failed to delete file: Access denied');
+    expect(error.code).toBe('STORAGE_DELETE_FAILED');
+  });
+
+  it('should create file not found error', () => {
+    const error = StorageError.fileNotFound('recordings/missing.wav');
+
+    expect(error.message).toBe('File not found: recordings/missing.wav');
+    expect(error.code).toBe('STORAGE_FILE_NOT_FOUND');
+    expect(error.statusCode).toBe(404);
+  });
+
+  it('should create bucket not configured error', () => {
+    const error = StorageError.bucketNotConfigured();
+
+    expect(error.message).toBe('Storage bucket not configured');
+    expect(error.code).toBe('STORAGE_BUCKET_NOT_CONFIGURED');
+  });
+});
+
+describe('DatabaseError', () => {
+  it('should create connection failed error', () => {
+    const error = DatabaseError.connectionFailed('Connection refused');
+
+    expect(error.message).toBe('Database connection failed: Connection refused');
+    expect(error.code).toBe('DATABASE_CONNECTION_FAILED');
+    expect(error.statusCode).toBe(503);
+  });
+
+  it('should create query failed error', () => {
+    const error = DatabaseError.queryFailed('fetch calls', 'Syntax error');
+
+    expect(error.message).toBe('Database query failed during fetch calls: Syntax error');
+    expect(error.code).toBe('DATABASE_QUERY_FAILED');
+    expect(error.context).toEqual({ operation: 'fetch calls' });
+  });
+
+  it('should create record not found error', () => {
+    const error = DatabaseError.recordNotFound('Call', 'call-123');
+
+    expect(error.message).toBe('Call not found: call-123');
+    expect(error.code).toBe('DATABASE_RECORD_NOT_FOUND');
+    expect(error.statusCode).toBe(404);
+    expect(error.context).toEqual({ entity: 'Call', id: 'call-123' });
+  });
+
+  it('should create duplicate record error', () => {
+    const error = DatabaseError.duplicateRecord('Call', 'twilioSid');
+
+    expect(error.message).toBe('Duplicate Call on field: twilioSid');
+    expect(error.code).toBe('DATABASE_DUPLICATE_RECORD');
+    expect(error.statusCode).toBe(409);
+  });
+});
+
+describe('ValidationError', () => {
+  it('should create required field error', () => {
+    const error = ValidationError.requiredField('phoneNumber');
+
+    expect(error.message).toBe('Missing required field: phoneNumber');
+    expect(error.code).toBe('VALIDATION_ERROR');
+    expect(error.statusCode).toBe(400);
+    expect(error.fields).toEqual({ phoneNumber: 'Required' });
+  });
+
+  it('should create invalid format error', () => {
+    const error = ValidationError.invalidFormat('email', 'valid email address');
+
+    expect(error.message).toBe('Invalid format for field: email. Expected: valid email address');
+    expect(error.fields).toEqual({ email: 'Expected valid email address' });
+  });
+
+  it('should create invalid value error', () => {
+    const error = ValidationError.invalidValue('rating', 'Must be between 1 and 5');
+
+    expect(error.message).toBe('Invalid value for field: rating. Must be between 1 and 5');
+    expect(error.fields).toEqual({ rating: 'Must be between 1 and 5' });
+  });
+});
+
+describe('formatErrorResponse', () => {
+  it('should format AppError', () => {
+    const error = new AppError('Test error', 'TEST_ERROR', 400);
+    const response = formatErrorResponse(error);
+
+    expect(response).toEqual({
+      error: 'Test error',
+      code: 'TEST_ERROR',
     });
   });
 
-  describe('DatabaseError', () => {
-    it('should create a database error with defaults', () => {
-      const error = new DatabaseError('Query failed');
+  it('should include validation fields for ValidationError', () => {
+    const error = ValidationError.requiredField('name');
+    const response = formatErrorResponse(error);
 
-      expect(error.message).toBe('Query failed');
-      expect(error.code).toBe(ErrorCodes.DATABASE_QUERY);
-      expect(error.statusCode).toBe(500);
-      expect(error.name).toBe('DatabaseError');
-    });
-
-    it('should create a database error with custom code', () => {
-      const error = new DatabaseError(
-        'Connection failed',
-        ErrorCodes.DATABASE_CONNECTION
-      );
-
-      expect(error.code).toBe(ErrorCodes.DATABASE_CONNECTION);
+    expect(response).toEqual({
+      error: 'Missing required field: name',
+      code: 'VALIDATION_ERROR',
+      details: { name: 'Required' },
     });
   });
 
-  describe('TwilioError', () => {
-    it('should create a Twilio error with error code', () => {
-      const error = new TwilioError(
-        'Invalid number',
-        ErrorCodes.TWILIO_API,
-        21211
-      );
+  it('should return generic error for unknown errors', () => {
+    const response = formatErrorResponse(new Error('Internal details'));
 
-      expect(error.message).toBe('Invalid number');
-      expect(error.code).toBe(ErrorCodes.TWILIO_API);
-      expect(error.statusCode).toBe(502);
-      expect(error.twilioErrorCode).toBe(21211);
-      expect(error.name).toBe('TwilioError');
+    expect(response).toEqual({
+      error: 'An unexpected error occurred',
+      code: 'INTERNAL_ERROR',
     });
   });
 
-  describe('OpenAIError', () => {
-    it('should create an OpenAI error', () => {
-      const error = new OpenAIError('Rate limit exceeded', ErrorCodes.OPENAI_RATE_LIMIT);
+  it('should return generic error for non-Error values', () => {
+    const response = formatErrorResponse('string error');
 
-      expect(error.message).toBe('Rate limit exceeded');
-      expect(error.code).toBe(ErrorCodes.OPENAI_RATE_LIMIT);
-      expect(error.statusCode).toBe(502);
-      expect(error.name).toBe('OpenAIError');
-    });
-  });
-
-  describe('StorageError', () => {
-    it('should create a storage error', () => {
-      const error = new StorageError('Upload failed', ErrorCodes.STORAGE_UPLOAD, {
-        bucket: 'recordings',
-      });
-
-      expect(error.message).toBe('Upload failed');
-      expect(error.code).toBe(ErrorCodes.STORAGE_UPLOAD);
-      expect(error.statusCode).toBe(500);
-      expect(error.details).toEqual({ bucket: 'recordings' });
-      expect(error.name).toBe('StorageError');
-    });
-  });
-
-  describe('ValidationError', () => {
-    it('should create a validation error with field errors', () => {
-      const error = new ValidationError('Validation failed', {
-        email: 'Invalid email format',
-        phone: 'Phone number required',
-      });
-
-      expect(error.message).toBe('Validation failed');
-      expect(error.code).toBe(ErrorCodes.VALIDATION_FAILED);
-      expect(error.statusCode).toBe(400);
-      expect(error.fieldErrors).toEqual({
-        email: 'Invalid email format',
-        phone: 'Phone number required',
-      });
-      expect(error.name).toBe('ValidationError');
-    });
-
-    it('should include field errors in JSON', () => {
-      const error = new ValidationError('Validation failed', {
-        name: 'Required',
-      });
-
-      const json = error.toJSON();
-
-      expect(json.fieldErrors).toEqual({ name: 'Required' });
-    });
-  });
-
-  describe('NotFoundError', () => {
-    it('should create a not found error with resource name', () => {
-      const error = new NotFoundError('Call');
-
-      expect(error.message).toBe('Call not found');
-      expect(error.code).toBe(ErrorCodes.NOT_FOUND);
-      expect(error.statusCode).toBe(404);
-      expect(error.details).toEqual({ resource: 'Call' });
-    });
-
-    it('should create a not found error with identifier', () => {
-      const error = new NotFoundError('Call', 'abc-123');
-
-      expect(error.message).toBe("Call with id 'abc-123' not found");
-      expect(error.details).toEqual({
-        resource: 'Call',
-        identifier: 'abc-123',
-      });
-    });
-  });
-
-  describe('ExternalServiceError', () => {
-    it('should create an external service error', () => {
-      const error = new ExternalServiceError('OpenAI', 'API timeout');
-
-      expect(error.message).toBe('External service error (OpenAI): API timeout');
-      expect(error.code).toBe(ErrorCodes.EXTERNAL_SERVICE);
-      expect(error.statusCode).toBe(502);
-      expect(error.serviceName).toBe('OpenAI');
+    expect(response).toEqual({
+      error: 'An unexpected error occurred',
+      code: 'INTERNAL_ERROR',
     });
   });
 });
 
-describe('Error Utility Functions', () => {
-  describe('isAppError', () => {
-    it('should return true for AppError instances', () => {
-      expect(isAppError(new AppError('test'))).toBe(true);
-      expect(isAppError(new DatabaseError('test'))).toBe(true);
-      expect(isAppError(new ValidationError('test'))).toBe(true);
-    });
-
-    it('should return false for non-AppError instances', () => {
-      expect(isAppError(new Error('test'))).toBe(false);
-      expect(isAppError('error')).toBe(false);
-      expect(isAppError(null)).toBe(false);
-      expect(isAppError(undefined)).toBe(false);
-    });
+describe('getErrorStatusCode', () => {
+  it('should return status code from AppError', () => {
+    expect(getErrorStatusCode(new AppError('Test', 'TEST', 404))).toBe(404);
+    expect(getErrorStatusCode(TwilioError.signatureValidationFailed())).toBe(401);
   });
 
-  describe('isOperationalError', () => {
-    it('should return true for operational errors', () => {
-      expect(isOperationalError(new AppError('test', ErrorCodes.INTERNAL_ERROR, 500, true))).toBe(true);
-    });
+  it('should return 500 for non-AppError', () => {
+    expect(getErrorStatusCode(new Error('Test'))).toBe(500);
+    expect(getErrorStatusCode('string error')).toBe(500);
+  });
+});
 
-    it('should return false for non-operational errors', () => {
-      expect(isOperationalError(new AppError('test', ErrorCodes.INTERNAL_ERROR, 500, false))).toBe(false);
-    });
-
-    it('should return false for non-AppError instances', () => {
-      expect(isOperationalError(new Error('test'))).toBe(false);
-    });
+describe('isOperationalError', () => {
+  it('should return true for operational AppError', () => {
+    const error = new AppError('Test', 'TEST', 500, true);
+    expect(isOperationalError(error)).toBe(true);
   });
 
-  describe('formatErrorResponse', () => {
-    it('should format AppError correctly', () => {
-      const error = new NotFoundError('Call', '123');
-      const response = formatErrorResponse(error, 'req-123');
-
-      expect(response).toEqual({
-        error: "Call with id '123' not found",
-        code: ErrorCodes.NOT_FOUND,
-        details: { resource: 'Call', identifier: '123' },
-        requestId: 'req-123',
-      });
-    });
-
-    it('should format generic errors in development', () => {
-      const originalEnv = process.env.NODE_ENV;
-      process.env.NODE_ENV = 'development';
-
-      const error = new Error('Something broke');
-      const response = formatErrorResponse(error);
-
-      expect(response.error).toBe('Something broke');
-      expect(response.code).toBe(ErrorCodes.INTERNAL_ERROR);
-
-      process.env.NODE_ENV = originalEnv;
-    });
-
-    it('should hide error details in production', () => {
-      const originalEnv = process.env.NODE_ENV;
-      process.env.NODE_ENV = 'production';
-
-      const error = new Error('Internal details');
-      const response = formatErrorResponse(error);
-
-      expect(response.error).toBe('An unexpected error occurred');
-      expect(response.details).toBeUndefined();
-
-      process.env.NODE_ENV = originalEnv;
-    });
+  it('should return false for non-operational AppError', () => {
+    const error = new AppError('Test', 'TEST', 500, false);
+    expect(isOperationalError(error)).toBe(false);
   });
 
-  describe('getErrorStatusCode', () => {
-    it('should return status code from AppError', () => {
-      expect(getErrorStatusCode(new NotFoundError('Call'))).toBe(404);
-      expect(getErrorStatusCode(new ValidationError('Invalid'))).toBe(400);
-      expect(getErrorStatusCode(new TwilioError('Failed'))).toBe(502);
-    });
+  it('should return false for non-AppError', () => {
+    expect(isOperationalError(new Error('Test'))).toBe(false);
+    expect(isOperationalError('string')).toBe(false);
+  });
+});
 
-    it('should return 500 for non-AppError', () => {
-      expect(getErrorStatusCode(new Error('test'))).toBe(500);
-      expect(getErrorStatusCode('error')).toBe(500);
-    });
+describe('getErrorMessage', () => {
+  it('should extract message from Error', () => {
+    expect(getErrorMessage(new Error('Test message'))).toBe('Test message');
   });
 
-  describe('wrapPrismaError', () => {
-    it('should wrap P2002 (unique constraint) errors', () => {
-      const prismaError = { code: 'P2002', meta: { target: ['email'] } };
-      const wrapped = wrapPrismaError(prismaError);
+  it('should return string as-is', () => {
+    expect(getErrorMessage('String error')).toBe('String error');
+  });
 
-      expect(wrapped).toBeInstanceOf(DatabaseError);
-      expect(wrapped.code).toBe(ErrorCodes.DATABASE_CONSTRAINT);
-      expect(wrapped.message).toContain('unique identifier');
-    });
+  it('should return Unknown error for other types', () => {
+    expect(getErrorMessage(null)).toBe('Unknown error');
+    expect(getErrorMessage(123)).toBe('Unknown error');
+  });
+});
 
-    it('should wrap P2025 (not found) errors', () => {
-      const prismaError = { code: 'P2025', meta: {} };
-      const wrapped = wrapPrismaError(prismaError);
+describe('getErrorContext', () => {
+  it('should extract context from AppError', () => {
+    const error = new AppError('Test', 'TEST_CODE', 400, true, { foo: 'bar' });
+    const context = getErrorContext(error);
 
-      expect(wrapped).toBeInstanceOf(DatabaseError);
-      expect(wrapped.code).toBe(ErrorCodes.DATABASE_QUERY);
-      expect(wrapped.message).toContain('not found');
-    });
+    expect(context.name).toBe('AppError');
+    expect(context.message).toBe('Test');
+    expect(context.code).toBe('TEST_CODE');
+    expect(context.statusCode).toBe(400);
+    expect(context.isOperational).toBe(true);
+    expect(context.errorContext).toEqual({ foo: 'bar' });
+    expect(context.stack).toBeDefined();
+  });
 
-    it('should wrap P1xxx (connection) errors', () => {
-      const prismaError = { code: 'P1001', meta: {} };
-      const wrapped = wrapPrismaError(prismaError);
+  it('should extract context from ValidationError', () => {
+    const error = ValidationError.requiredField('name');
+    const context = getErrorContext(error);
 
-      expect(wrapped).toBeInstanceOf(DatabaseError);
-      expect(wrapped.code).toBe(ErrorCodes.DATABASE_CONNECTION);
-    });
+    expect(context.validationFields).toEqual({ name: 'Required' });
+  });
 
-    it('should wrap unknown errors', () => {
-      const prismaError = { code: 'P9999', message: 'Unknown error' };
-      const wrapped = wrapPrismaError(prismaError);
+  it('should handle regular Error', () => {
+    const error = new Error('Test');
+    const context = getErrorContext(error);
 
-      expect(wrapped).toBeInstanceOf(DatabaseError);
-      expect(wrapped.message).toBe('Unknown error');
-    });
+    expect(context.name).toBe('Error');
+    expect(context.message).toBe('Test');
+    expect(context.stack).toBeDefined();
+  });
+
+  it('should handle non-Error values', () => {
+    const context = getErrorContext('string error');
+
+    expect(context.name).toBe('Unknown');
+    expect(context.message).toBe('string error');
+    expect(context.stack).toBeUndefined();
   });
 });

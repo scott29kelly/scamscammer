@@ -5,6 +5,15 @@
 import { GET } from '../route';
 import prisma from '@/lib/db';
 
+// Mock CallStatus enum
+const CallStatus = {
+  RINGING: 'RINGING',
+  IN_PROGRESS: 'IN_PROGRESS',
+  COMPLETED: 'COMPLETED',
+  FAILED: 'FAILED',
+  NO_ANSWER: 'NO_ANSWER',
+} as const;
+
 // Define CallStatus enum to match Prisma schema
 const CallStatus = {
   RINGING: 'RINGING',
@@ -64,6 +73,34 @@ jest.mock('@/lib/monitoring', () => ({
     recordError: jest.fn(),
     trackDuration: jest.fn().mockImplementation((fn) => fn()),
   }),
+}));
+
+// Mock the Prisma client enums
+jest.mock('@prisma/client', () => ({
+  CallStatus: {
+    RINGING: 'RINGING',
+    IN_PROGRESS: 'IN_PROGRESS',
+    COMPLETED: 'COMPLETED',
+    FAILED: 'FAILED',
+    NO_ANSWER: 'NO_ANSWER',
+  },
+  Speaker: {
+    SCAMMER: 'SCAMMER',
+    EARL: 'EARL',
+  },
+}));
+
+// Mock the logger
+jest.mock('@/lib/logger', () => ({
+  apiLogger: {
+    forRequest: jest.fn(() => ({
+      debug: jest.fn(),
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+      logError: jest.fn(),
+    })),
+  },
 }));
 
 const mockPrisma = prisma as jest.Mocked<typeof prisma>;
@@ -183,7 +220,7 @@ describe('GET /api/stats', () => {
 
     expect(response.status).toBe(500);
     expect(data).toHaveProperty('error');
-    expect(data).toHaveProperty('code');
+    expect(data).toHaveProperty('code', 'DATABASE_QUERY_FAILED');
   });
 
   it('should fill missing days with zero counts', async () => {

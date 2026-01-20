@@ -1,206 +1,5 @@
 # Ralphy Progress Log
 
-## Task: Add Authentication and Route Protection
-
-**Status:** Completed
-**Date:** 2026-01-19
-
-### What was done:
-
-1. **Created authentication utilities module**
-   - Created `src/lib/auth.ts` with:
-     - Password validation using `DASHBOARD_PASSWORD` environment variable
-     - Session token generation with timestamp and password hash
-     - Session validation with 7-day expiration
-     - Cookie-based session management (httpOnly, secure in production)
-     - Route protection helpers (`isProtectedRoute`, `isLoginRoute`, `isApiRoute`)
-     - Request authentication checking for middleware
-
-2. **Created login page**
-   - Created `src/app/login/page.tsx` React client component
-   - Dark theme UI matching the dashboard design
-   - Form with password input and submit button
-   - Loading state and error handling
-   - Redirect to `/calls` after successful login
-   - Uses fetch API to call login endpoint
-
-3. **Created authentication API routes**
-   - Created `src/app/api/auth/login/route.ts`:
-     - POST handler to authenticate with password
-     - Returns 400 for missing password
-     - Returns 401 for invalid password
-     - Returns 200 and creates session for valid password
-     - Proper error handling with 500 response on failure
-   - Created `src/app/api/auth/logout/route.ts`:
-     - POST handler to clear authentication session
-     - Destroys session cookie
-
-4. **Created Next.js middleware for route protection**
-   - Created `src/middleware.ts` with:
-     - Protection for `/calls/*` and `/api/calls/*` routes
-     - JSON 401 response for unauthorized API requests
-     - Redirect to `/login` for unauthorized page requests
-     - Preserves redirect URL in query parameter
-     - Does NOT protect Twilio webhooks (`/api/twilio/*`, `/api/voice/*`)
-     - Does NOT protect public routes (`/api/stats`, `/api/health`, `/api/auth/*`)
-
-5. **Added authentication environment variables**
-   - Created `.env.example` with `DASHBOARD_PASSWORD` variable
-   - Includes all other expected environment variables documented
-
-6. **Created TypeScript configuration**
-   - Created `tsconfig.json` with path alias support (`@/*` -> `./src/*`)
-   - Configured for Next.js App Router with strict mode
-
-7. **Created comprehensive tests**
-   - Created `src/lib/__tests__/auth.test.ts` (19 test cases):
-     - Password validation tests (correct/incorrect/missing/empty)
-     - Session token generation tests
-     - Session validation tests (empty/malformed/expired/valid/wrong hash)
-     - Route protection pattern tests
-     - Login route detection tests
-     - API route detection tests
-   - Created `src/app/api/auth/login/__tests__/route.test.ts` (4 test cases):
-     - Missing password returns 400
-     - Invalid password returns 401
-     - Valid password returns 200 and creates session
-     - Session creation failure returns 500
-   - All 23 tests pass
-
-### Files created:
-- `scamscrammer/src/lib/auth.ts` - Authentication utilities module
-- `scamscrammer/src/app/login/page.tsx` - Login page component
-- `scamscrammer/src/app/api/auth/login/route.ts` - Login API endpoint
-- `scamscrammer/src/app/api/auth/logout/route.ts` - Logout API endpoint
-- `scamscrammer/src/middleware.ts` - Route protection middleware
-- `scamscrammer/.env.example` - Environment variables template
-- `scamscrammer/tsconfig.json` - TypeScript configuration
-- `scamscrammer/src/lib/__tests__/auth.test.ts` - Auth module tests
-- `scamscrammer/src/app/api/auth/login/__tests__/route.test.ts` - Login route tests
-
-### Security considerations:
-- Session cookies are httpOnly (not accessible via JavaScript)
-- Secure flag enabled in production (HTTPS only)
-- SameSite=lax for CSRF protection
-- 7-day session expiration
-- Twilio webhooks remain unprotected (use Twilio signature validation instead)
-- Simple password-based auth as specified (MVP level)
-
----
-
-## Task: Create Stats API Endpoint
-
-**Status:** Completed
-**Date:** 2026-01-19
-
-### What was done:
-
-1. **Created Calls API endpoint (`/api/calls`)**
-   - Created `src/app/api/calls/route.ts` with GET handler
-   - Features:
-     - Pagination with `page` and `limit` params (max 100 per page)
-     - Status filtering via `status` query param
-     - Date range filtering via `startDate` and `endDate` params
-     - Search functionality (searches fromNumber, toNumber, notes)
-     - Sorting by `createdAt`, `duration`, or `rating` (ascending/descending)
-   - Returns `CallListResponse` with paginated calls and pagination metadata
-   - Includes segment count (`_count.segments`) for each call
-   - Proper error handling with 500 response on database errors
-
-2. **Created CallList component (`src/components/CallList.tsx`)**
-   - Reusable React component for displaying calls in a table
-   - Features:
-     - Table display with Date, From, Status, Duration, Rating, Segments columns
-     - Status filter buttons (All, RINGING, IN_PROGRESS, COMPLETED, FAILED, NO_ANSWER)
-     - Sort dropdown and clickable column headers
-     - Pagination controls with page numbers
-     - Loading skeleton state
-     - Empty state with helpful messages
-     - Phone number formatting (US format)
-     - Duration formatting (mm:ss)
-     - Rating display as stars
-     - Status badges with color coding
-     - Click handler for row navigation
-   - Fully typed with TypeScript
-   - Tailwind CSS styling with dark mode support
-
-3. **Created Calls page (`/calls`)**
-   - Created `src/app/calls/page.tsx` as a client component
-   - Features:
-     - Fetches data from `/api/calls` endpoint
-     - URL state management for filters (page, status, sortBy, sortOrder, search)
-     - Search bar with text input
-     - Loading and error states
-     - Click navigation to call detail pages
-   - Uses CallList component for display
-   - Responsive layout with max-width container
-
-4. **Added tsconfig.json**
-   - Created TypeScript configuration for the project
-   - Configured path aliases (`@/*`)
-   - Added types for Jest and testing-library
-
-5. **Enhanced Jest configuration**
-   - Updated `jest.config.mjs` with project-based configuration
-   - Separate environments for API tests (node) and component tests (jsdom)
-   - Added JSX support for component tests
-   - Updated `jest.setup.js` with TextEncoder polyfill for jsdom
-
-6. **Installed testing dependencies**
-   - Added `@testing-library/react` for component testing
-   - Added `jest-environment-jsdom` for browser-like test environment
-
-7. **Created comprehensive tests**
-
-   **API Tests (`src/app/api/calls/__tests__/route.test.ts`):**
-   - Returns paginated calls list
-   - Handles page and limit parameters
-   - Filters by status
-   - Filters by date range
-   - Handles search parameter
-   - Handles sort parameters
-   - Defaults to sorting by createdAt desc
-   - Handles empty results
-   - Returns 500 on database error
-   - Enforces maximum limit of 100
-   - Enforces minimum page of 1
-   - Ignores invalid status values
-   - Includes segment count in response
-   - All 13 tests pass
-
-   **Component Tests (`src/components/__tests__/CallList.test.tsx`):**
-   - Renders calls in a table
-   - Shows empty state when no calls
-   - Shows loading state
-   - Handles pagination correctly
-   - Handles row click
-   - Shows status filter buttons
-   - Handles status filter click
-   - Shows empty state with filter message
-   - Formats duration correctly
-   - Displays rating stars correctly
-   - Shows sort controls
-   - Handles sort dropdown interaction
-   - Handles column header click for sorting
-   - Toggles sort order when clicking same column
-   - Formats phone numbers correctly
-   - Shows correct page numbers in pagination
-   - Handles page number click
-   - All 17 tests pass
-
-### Files created/modified:
-- `scamscrammer/prisma/schema.prisma` - Database schema with Call, CallSegment models and enums
-- `scamscrammer/prisma.config.ts` - Prisma 7 configuration
-- `scamscrammer/src/lib/db.ts` - Prisma client singleton
-- `scamscrammer/src/types/index.ts` - TypeScript type definitions
-- `scamscrammer/src/app/api/stats/route.ts` - Stats API endpoint
-- `scamscrammer/src/app/api/stats/__tests__/route.test.ts` - API tests
-- `scamscrammer/jest.config.mjs` - Jest configuration
-- `scamscrammer/jest.setup.js` - Jest setup
-- `scamscrammer/package.json` - Added test scripts and dependencies
-
----
-
 ## Task: Add Error Handling and Monitoring
 
 **Status:** Completed
@@ -208,99 +7,127 @@
 
 ### What was done:
 
-1. **Created custom error classes (`src/lib/errors.ts`)**
-   - `AppError` - Base error class with code, statusCode, isOperational, details, timestamp
-   - `DatabaseError` - For database-related errors
-   - `TwilioError` - For Twilio API errors with twilioErrorCode
-   - `OpenAIError` - For OpenAI API errors
-   - `StorageError` - For S3/storage errors
-   - `ValidationError` - For input validation errors with fieldErrors
-   - `NotFoundError` - For resource not found errors
-   - `ExternalServiceError` - For generic external service errors
-   - Error codes enum (DATABASE_CONNECTION, TWILIO_API, OPENAI_RATE_LIMIT, etc.)
-   - Utility functions: `isAppError()`, `isOperationalError()`, `formatErrorResponse()`, `getErrorStatusCode()`, `wrapPrismaError()`
+1. **Created src/lib/errors.ts - Custom Error Classes**
+   - `AppError` - Base application error class with code, statusCode, isOperational flag
+   - `TwilioError` - Twilio-related errors with factory methods:
+     - `signatureValidationFailed()` - 401 for invalid signatures
+     - `callNotFound(callSid)` - 404 for missing calls
+     - `webhookError(operation)` - 500 for webhook failures
+     - `connectionFailed()` - 503 for connection issues
+   - `OpenAIError` - OpenAI Realtime API errors with factory methods:
+     - `connectionFailed()` - 503 for WebSocket connection failures
+     - `sessionError()` - 500 for session issues
+     - `audioStreamError()` - 500 for audio stream issues
+     - `rateLimitExceeded()` - 429 for rate limits
+     - `invalidResponse()` - 502 for malformed responses
+   - `StorageError` - S3 storage errors with factory methods:
+     - `uploadFailed()` - 500 for upload failures
+     - `downloadFailed()` - 500 for download failures
+     - `deleteFailed()` - 500 for delete failures
+     - `fileNotFound()` - 404 for missing files
+     - `bucketNotConfigured()` - 500 for missing config
+   - `DatabaseError` - Database/Prisma errors with factory methods:
+     - `connectionFailed()` - 503 for connection failures
+     - `queryFailed()` - 500 for query failures
+     - `recordNotFound()` - 404 for missing records
+     - `duplicateRecord()` - 409 for duplicates
+   - `ValidationError` - Input validation errors with factory methods:
+     - `requiredField()` - 400 for missing required fields
+     - `invalidFormat()` - 400 for format issues
+     - `invalidValue()` - 400 for invalid values
+   - Error formatting helpers:
+     - `formatErrorResponse(error)` - Safe API response formatting
+     - `getErrorStatusCode(error)` - Extract HTTP status code
+     - `isOperationalError(error)` - Check if error is expected
+     - `getErrorMessage(error)` - Safe message extraction
+     - `getErrorContext(error)` - Context for logging
 
-2. **Created structured logging service (`src/lib/logger.ts`)**
-   - Multiple log levels: DEBUG, INFO, WARN, ERROR
-   - Structured JSON output in production for log aggregation
-   - Pretty-printed colored output in development
-   - Request context tracking with correlation IDs
-   - `generateRequestId()` - Creates unique request IDs
-   - `setRequestContext()` / `clearRequestContext()` - Manages request-scoped context
-   - `createLogger()` - Creates child loggers with default context
-   - `withRequestLogging()` - Utility to wrap async functions with logging
+2. **Created src/lib/logger.ts - Structured Logging Utility**
+   - `Logger` class with configurable options:
+     - Log levels: debug, info, warn, error
+     - Pretty print mode for development
+     - JSON format for production (log aggregator friendly)
+     - Configurable minimum log level via LOG_LEVEL env var
+   - Features:
+     - Child loggers for adding context
+     - Request-scoped loggers with requestId
+     - Service-specific loggers
+     - Error logging with stack traces
+   - Pre-configured service loggers exported:
+     - `logger` - Default logger
+     - `twilioLogger` - Twilio service logs
+     - `openaiLogger` - OpenAI service logs
+     - `storageLogger` - S3 storage logs
+     - `databaseLogger` - Database/Prisma logs
+     - `apiLogger` - API route logs
 
-3. **Created monitoring service (`src/lib/monitoring.ts`)**
-   - Metric types: COUNTER, GAUGE, HISTOGRAM, TIMER
-   - `monitoring.incrementCounter()` - Track counts/increments
-   - `monitoring.setGauge()` - Track current values
-   - `monitoring.recordHistogram()` - Track distributions
-   - `monitoring.timeAsync()` / `monitoring.timeSync()` - Time operations
-   - `monitoring.recordRequest()` / `monitoring.recordError()` - Request/error tracking
-   - `monitoring.getRequestsPerMinute()` / `monitoring.getErrorRate()` - Rate metrics
-   - `monitoring.getMemoryUsage()` / `monitoring.getUptime()` - System metrics
-   - `createTimer()` - Manual timing control
-   - `trackDatabaseQuery()` - Database query monitoring helper
-   - `trackExternalCall()` - External API monitoring helper
-   - `createRequestMonitoring()` - Request-scoped monitoring
+3. **Created src/app/api/health/route.ts - Health Check Endpoint**
+   - GET /api/health endpoint
+   - Checks all services:
+     - Database: Actual connection test with latency measurement
+     - Twilio: Configuration validation
+     - OpenAI: API key configuration check
+     - Storage: S3 bucket and credentials check
+   - Returns overall status:
+     - `healthy` (200) - All services operational
+     - `degraded` (200) - Some non-critical services unavailable
+     - `unhealthy` (503) - Critical services (database) unavailable
+   - Response includes:
+     - `status` - Overall health status
+     - `timestamp` - ISO timestamp
+     - `version` - Application version
+     - `services` - Individual service statuses with latency
+     - `uptime` - Server uptime in seconds
 
-4. **Created health check endpoint (`src/app/api/health/route.ts`)**
-   - GET /api/health - Returns service health status
-   - Checks database connectivity with latency measurement
-   - Returns service statuses: healthy, degraded, unhealthy
-   - Returns HTTP 200 for healthy/degraded, 503 for unhealthy
-   - Includes system metrics:
-     - Uptime in seconds
-     - Memory usage (heapUsed, heapTotal, external, rss)
-     - Requests per minute
-     - Error rate percentage
-   - Suitable for load balancer health checks and Kubernetes probes
+4. **Updated src/app/api/stats/route.ts with Error Handling**
+   - Added request logging with apiLogger
+   - Added proper error handling with DatabaseError
+   - Uses formatErrorResponse for consistent error responses
+   - Logs both successful operations and errors with context
 
-5. **Updated stats API route with error handling (`src/app/api/stats/route.ts`)**
-   - Added request context with correlation IDs
-   - Added structured logging for requests and errors
-   - Added request monitoring (success/error tracking)
-   - Improved error responses with error codes and details
-   - Uses `wrapPrismaError()` for database error handling
-   - Maintains backwards compatibility with existing response format
+5. **Added TypeScript types to src/types/index.ts**
+   - `ServiceStatus` interface for health check service status
+   - `HealthResponse` interface for health check API response
 
-6. **Updated database client with monitoring (`src/lib/db.ts`)**
-   - Added Prisma event listeners for query, error, and warning events
-   - Logs queries with duration in development
-   - Records query metrics to monitoring service
-   - Logs all database errors
-   - Added `testDatabaseConnection()` utility
-   - Added `disconnectDatabase()` for graceful shutdown
+6. **Created comprehensive test suites**
+   - `src/lib/__tests__/errors.test.ts` - 43 tests for error classes
+     - Tests all error class constructors
+     - Tests all factory methods
+     - Tests helper functions
+   - `src/lib/__tests__/logger.test.ts` - 17 tests for logger
+     - Tests log level filtering
+     - Tests context merging
+     - Tests child loggers
+     - Tests pretty print vs JSON output
+   - `src/app/api/health/__tests__/route.test.ts` - 10 tests for health endpoint
+     - Tests healthy status with all services configured
+     - Tests unhealthy when database fails
+     - Tests degraded status for various misconfigurations
+   - Updated `src/app/api/stats/__tests__/route.test.ts` - 4 tests
+     - Updated error expectation to use new error format
+     - Added logger mocking
 
-7. **Updated TypeScript types (`src/types/index.ts`)**
-   - Updated ApiErrorResponse to support `Record<string, unknown>` for details
-   - Added requestId field for error responses
-
-8. **Updated Jest configuration (`jest.config.mjs`)**
-   - Added baseUrl and paths configuration for ts-jest
-   - Properly resolves `@/` path aliases in tests
-
-9. **Created comprehensive tests**
-   - `src/lib/__tests__/errors.test.ts` - 35 tests for error classes and utilities
-   - `src/lib/__tests__/logger.test.ts` - 12 tests for logging service
-   - `src/lib/__tests__/monitoring.test.ts` - 19 tests for monitoring service
-   - `src/app/api/health/__tests__/route.test.ts` - 6 tests for health endpoint
-   - Updated `src/app/api/stats/__tests__/route.test.ts` with mocks for new dependencies
-   - All 70 tests pass
+7. **Created tsconfig.json for the project**
+   - TypeScript strict mode enabled
+   - Path alias `@/*` configured for src directory
 
 ### Files created:
-- `scamscrammer/src/lib/errors.ts` - Custom error classes and utilities
-- `scamscrammer/src/lib/logger.ts` - Structured logging service
-- `scamscrammer/src/lib/monitoring.ts` - Monitoring and metrics service
+- `scamscrammer/src/lib/errors.ts` - Custom error classes
+- `scamscrammer/src/lib/logger.ts` - Logging utility
 - `scamscrammer/src/app/api/health/route.ts` - Health check endpoint
-- `scamscrammer/src/lib/__tests__/errors.test.ts` - Error handling tests
+- `scamscrammer/src/lib/__tests__/errors.test.ts` - Error tests
 - `scamscrammer/src/lib/__tests__/logger.test.ts` - Logger tests
-- `scamscrammer/src/lib/__tests__/monitoring.test.ts` - Monitoring tests
 - `scamscrammer/src/app/api/health/__tests__/route.test.ts` - Health endpoint tests
+- `scamscrammer/tsconfig.json` - TypeScript configuration
 
 ### Files modified:
 - `scamscrammer/src/app/api/stats/route.ts` - Added error handling and logging
-- `scamscrammer/src/lib/db.ts` - Added monitoring and event logging
-- `scamscrammer/src/types/index.ts` - Updated ApiErrorResponse type
-- `scamscrammer/jest.config.mjs` - Added path aliases for ts-jest
-- `scamscrammer/src/app/api/stats/__tests__/route.test.ts` - Added mocks for new dependencies
+- `scamscrammer/src/app/api/stats/__tests__/route.test.ts` - Updated for new error format
+- `scamscrammer/src/types/index.ts` - Added health check types
+
+### Test Results:
+All 74 tests pass:
+- `src/lib/__tests__/errors.test.ts` - 43 tests
+- `src/lib/__tests__/logger.test.ts` - 17 tests
+- `src/app/api/health/__tests__/route.test.ts` - 10 tests
+- `src/app/api/stats/__tests__/route.test.ts` - 4 tests
