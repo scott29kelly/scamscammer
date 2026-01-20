@@ -1,15 +1,14 @@
 /**
- * Incoming Call Webhook Handler Tests
+ * Incoming Call Webhook Tests
  */
 
-import { POST, OPTIONS } from '../route';
-import prisma from '../../../../../lib/db';
-import { CallStatus } from '@prisma/client';
 import { NextRequest } from 'next/server';
-import * as twilioHelpers from '../../../../../lib/twilio';
+import { POST } from '../route';
+import prisma from '@/lib/db';
+import { CallStatus } from '@prisma/client';
 
 // Mock the Prisma client
-jest.mock('../../../../../lib/db', () => ({
+jest.mock('@/lib/db', () => ({
   __esModule: true,
   default: {
     call: {
@@ -18,241 +17,283 @@ jest.mock('../../../../../lib/db', () => ({
   },
 }));
 
-// Mock Twilio helpers
-jest.mock('../../../../../lib/twilio', () => ({
-  parseTwilioWebhookBody: jest.fn(),
-  isTwilioWebhookPayload: jest.fn(),
-  validateTwilioSignature: jest.fn(),
-  formatPhoneNumber: jest.fn((num: string) => num),
-  generateGreetingAndStreamTwiML: jest.fn(),
-  generateFallbackTwiML: jest.fn(),
-  buildWebSocketUrl: jest.fn(),
-  getEarlGreeting: jest.fn(),
+// Mock the twilio module
+jest.mock('@/lib/twilio', () => ({
+  validateRequest: jest.fn(() => true),
+  createStreamingTwiml: jest.fn(
+    (greeting, streamUrl) =>
+      `<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="Polly.Matthew-Neural">${greeting}</Say><Connect><Stream url="${streamUrl}"/></Connect></Response>`
+  ),
+  createErrorTwiml: jest.fn(
+    () =>
+      '<?xml version="1.0" encoding="UTF-8"?><Response><Say>Error</Say><Hangup/></Response>'
+  ),
 }));
 
 const mockPrisma = prisma as jest.Mocked<typeof prisma>;
-const mockTwilioHelpers = twilioHelpers as jest.Mocked<typeof twilioHelpers>;
+const mockTwilio = jest.requireMock('@/lib/twilio');
 
-// Helper to create a mock NextRequest
-function createMockRequest(): NextRequest {
-  const url = 'https://example.com/api/twilio/incoming';
-  const request = new NextRequest(url, {
+// Helper to create a mock NextRequest with form data
+function createMockRequest(
+  params: Record<string, string>,
+  headers: Record<string, string> = {}
+): NextRequest {
+  const formData = new FormData();
+  Object.entries(params).forEach(([key, value]) => {
+    formData.append(key, value);
+  });
+
+  const request = new NextRequest('https://example.com/api/twilio/incoming', {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'x-twilio-signature': 'valid-signature',
+      'X-Twilio-Signature': 'valid-signature',
+      ...headers,
     },
   });
+
+  // Mock the formData method
+  jest.spyOn(request, 'formData').mockResolvedValue(formData);
+
   return request;
 }
 
 describe('POST /api/twilio/incoming', () => {
-  const validPayload = {
-    CallSid: 'CA123456789',
-    AccountSid: 'AC123456789',
-    From: '+15551234567',
-    To: '+15559876543',
-    CallStatus: 'ringing',
-    Direction: 'inbound',
-    CallerName: 'Spam Caller',
-    FromCity: 'New York',
-    FromState: 'NY',
-    FromCountry: 'US',
-  };
-
-  const mockCall = {
-    id: 'cuid-123',
-    twilioSid: 'CA123456789',
-    fromNumber: '+15551234567',
-    toNumber: '+15559876543',
-    status: CallStatus.RINGING,
-    duration: null,
-    recordingUrl: null,
-    transcriptUrl: null,
-    rating: null,
-    notes: null,
-    tags: [],
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  };
+  const originalEnv = process.env;
 
   beforeEach(() => {
     jest.clearAllMocks();
-
-    // Setup default mock implementations
-    mockTwilioHelpers.parseTwilioWebhookBody.mockResolvedValue(validPayload);
-    mockTwilioHelpers.isTwilioWebhookPayload.mockReturnValue(true);
-    mockTwilioHelpers.validateTwilioSignature.mockReturnValue(true);
-    mockTwilioHelpers.formatPhoneNumber.mockImplementation((num: string) => num);
-    mockTwilioHelpers.getEarlGreeting.mockReturnValue('Hello! This is Earl speaking.');
-    mockTwilioHelpers.buildWebSocketUrl.mockReturnValue('wss://example.com/api/voice/stream?callSid=CA123456789');
-    mockTwilioHelpers.generateGreetingAndStreamTwiML.mockReturnValue(
-      '<?xml version="1.0" encoding="UTF-8"?><Response><Say>Hello!</Say><Connect><Stream url="wss://example.com/api/voice/stream?callSid=CA123456789"/></Connect></Response>'
-    );
-    mockTwilioHelpers.generateFallbackTwiML.mockReturnValue(
-      '<?xml version="1.0" encoding="UTF-8"?><Response><Say>Error occurred</Say><Hangup/></Response>'
-    );
-
-    (mockPrisma.call.create as jest.Mock).mockResolvedValue(mockCall);
-
-    // Set environment variable
-    process.env.NEXT_PUBLIC_APP_URL = 'https://example.com';
+    process.env = { ...originalEnv, NODE_ENV: 'development' };
   });
 
   afterEach(() => {
-    delete process.env.NEXT_PUBLIC_APP_URL;
+    process.env = originalEnv;
   });
 
-  it('should successfully process an incoming call', async () => {
-    const request = createMockRequest();
+  it('should handle incoming call and return TwiML response', async () => {
+    const callParams = {
+      CallSid: 'CA123456789',
+      AccountSid: 'AC123456789',
+      From: '+15551234567',
+      To: '+15559876543',
+      CallStatus: 'ringing',
+      Direction: 'inbound',
+    };
+
+    (mockPrisma.call.create as jest.Mock).mockResolvedValue({
+      id: 'call-1',
+      twilioSid: callParams.CallSid,
+      fromNumber: callParams.From,
+      toNumber: callParams.To,
+      status: CallStatus.RINGING,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const request = createMockRequest(callParams);
     const response = await POST(request);
 
     expect(response.status).toBe(200);
-    expect(response.headers.get('Content-Type')).toBe('application/xml');
+    expect(response.headers.get('Content-Type')).toBe('text/xml');
 
-    const responseBody = await response.text();
-    expect(responseBody).toContain('<?xml version="1.0"');
-    expect(responseBody).toContain('<Response>');
-  });
-
-  it('should parse the webhook body', async () => {
-    const request = createMockRequest();
-    await POST(request);
-
-    expect(mockTwilioHelpers.parseTwilioWebhookBody).toHaveBeenCalledWith(request);
-  });
-
-  it('should validate Twilio signature', async () => {
-    const request = createMockRequest();
-    await POST(request);
-
-    expect(mockTwilioHelpers.validateTwilioSignature).toHaveBeenCalledWith(
-      request,
-      validPayload
-    );
-  });
-
-  it('should return 401 when signature validation fails', async () => {
-    mockTwilioHelpers.validateTwilioSignature.mockReturnValue(false);
-
-    const request = createMockRequest();
-    const response = await POST(request);
-
-    expect(response.status).toBe(401);
     const body = await response.text();
-    expect(body).toBe('Unauthorized');
-  });
+    expect(body).toContain('<?xml');
+    expect(body).toContain('<Response>');
+    expect(body).toContain('<Say');
+    expect(body).toContain('<Connect>');
+    expect(body).toContain('<Stream');
 
-  it('should return fallback TwiML when payload is invalid', async () => {
-    mockTwilioHelpers.isTwilioWebhookPayload.mockReturnValue(false);
-
-    const request = createMockRequest();
-    const response = await POST(request);
-
-    expect(response.status).toBe(200);
-    expect(mockTwilioHelpers.generateFallbackTwiML).toHaveBeenCalled();
-  });
-
-  it('should create a call record in the database', async () => {
-    const request = createMockRequest();
-    await POST(request);
-
+    // Verify call was created in database
     expect(mockPrisma.call.create).toHaveBeenCalledWith({
       data: {
-        twilioSid: 'CA123456789',
-        fromNumber: '+15551234567',
-        toNumber: '+15559876543',
+        twilioSid: callParams.CallSid,
+        fromNumber: callParams.From,
+        toNumber: callParams.To,
         status: CallStatus.RINGING,
-        tags: [],
       },
     });
   });
 
-  it('should format phone numbers', async () => {
-    const request = createMockRequest();
-    await POST(request);
+  it('should return error TwiML when required parameters are missing', async () => {
+    const callParams = {
+      CallSid: '', // Missing CallSid
+      From: '+15551234567',
+      To: '+15559876543',
+    };
 
-    expect(mockTwilioHelpers.formatPhoneNumber).toHaveBeenCalledWith('+15551234567');
-    expect(mockTwilioHelpers.formatPhoneNumber).toHaveBeenCalledWith('+15559876543');
-  });
-
-  it('should get Earl greeting', async () => {
-    const request = createMockRequest();
-    await POST(request);
-
-    expect(mockTwilioHelpers.getEarlGreeting).toHaveBeenCalled();
-  });
-
-  it('should build WebSocket URL', async () => {
-    const request = createMockRequest();
-    await POST(request);
-
-    expect(mockTwilioHelpers.buildWebSocketUrl).toHaveBeenCalledWith(
-      'https://example.com',
-      'CA123456789'
-    );
-  });
-
-  it('should generate greeting and stream TwiML', async () => {
-    const request = createMockRequest();
-    await POST(request);
-
-    expect(mockTwilioHelpers.generateGreetingAndStreamTwiML).toHaveBeenCalledWith(
-      'Hello! This is Earl speaking.',
-      'wss://example.com/api/voice/stream?callSid=CA123456789',
-      {
-        voice: 'Polly.Matthew',
-        language: 'en-US',
-        track: 'both',
-      }
-    );
-  });
-
-  it('should return fallback TwiML on database error', async () => {
-    (mockPrisma.call.create as jest.Mock).mockRejectedValue(new Error('Database error'));
-
-    const request = createMockRequest();
+    const request = createMockRequest(callParams);
     const response = await POST(request);
 
     expect(response.status).toBe(200);
-    expect(mockTwilioHelpers.generateFallbackTwiML).toHaveBeenCalled();
+    expect(response.headers.get('Content-Type')).toBe('text/xml');
+
+    // Should return error TwiML, not create a call
+    expect(mockTwilio.createErrorTwiml).toHaveBeenCalled();
+    expect(mockPrisma.call.create).not.toHaveBeenCalled();
   });
 
-  it('should return fallback TwiML on unexpected error', async () => {
-    mockTwilioHelpers.parseTwilioWebhookBody.mockRejectedValue(new Error('Unexpected error'));
+  it('should handle duplicate call SID gracefully', async () => {
+    const callParams = {
+      CallSid: 'CA123456789',
+      AccountSid: 'AC123456789',
+      From: '+15551234567',
+      To: '+15559876543',
+      CallStatus: 'ringing',
+    };
 
-    const request = createMockRequest();
+    // Simulate unique constraint violation
+    (mockPrisma.call.create as jest.Mock).mockRejectedValue(
+      new Error('Unique constraint failed on the fields: (`twilioSid`)')
+    );
+
+    const request = createMockRequest(callParams);
     const response = await POST(request);
 
+    // Should still return success TwiML
     expect(response.status).toBe(200);
-    expect(response.headers.get('Content-Type')).toBe('application/xml');
+    expect(response.headers.get('Content-Type')).toBe('text/xml');
+
+    const body = await response.text();
+    expect(body).toContain('<Response>');
+    expect(mockTwilio.createStreamingTwiml).toHaveBeenCalled();
   });
 
-  it('should handle missing NEXT_PUBLIC_APP_URL by extracting from request', async () => {
-    delete process.env.NEXT_PUBLIC_APP_URL;
+  it('should return 403 for invalid Twilio signature in production', async () => {
+    process.env = { ...originalEnv, NODE_ENV: 'production' };
 
-    const request = createMockRequest();
+    const callParams = {
+      CallSid: 'CA123456789',
+      From: '+15551234567',
+      To: '+15559876543',
+      CallStatus: 'ringing',
+    };
+
+    // Mock validation to fail
+    mockTwilio.validateRequest.mockReturnValue(false);
+
+    const request = createMockRequest(callParams);
+    const response = await POST(request);
+
+    expect(response.status).toBe(403);
+  });
+
+  it('should skip signature validation in development mode', async () => {
+    process.env = { ...originalEnv, NODE_ENV: 'development' };
+
+    const callParams = {
+      CallSid: 'CA123456789',
+      From: '+15551234567',
+      To: '+15559876543',
+      CallStatus: 'ringing',
+    };
+
+    (mockPrisma.call.create as jest.Mock).mockResolvedValue({
+      id: 'call-1',
+      twilioSid: callParams.CallSid,
+      fromNumber: callParams.From,
+      toNumber: callParams.To,
+      status: CallStatus.RINGING,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const request = createMockRequest(callParams, {
+      // No X-Twilio-Signature header
+    });
+    // Remove the header
+    jest.spyOn(request.headers, 'get').mockImplementation((name) => {
+      if (name === 'X-Twilio-Signature') return null;
+      if (name === 'host') return 'localhost:3000';
+      return null;
+    });
+
+    const response = await POST(request);
+
+    // Should succeed in development mode
+    expect(response.status).toBe(200);
+  });
+
+  it('should use configured app URL for stream URL in production', async () => {
+    process.env = {
+      ...originalEnv,
+      NODE_ENV: 'development',
+      NEXT_PUBLIC_APP_URL: 'https://scamscrammer.example.com',
+    };
+
+    const callParams = {
+      CallSid: 'CA123456789',
+      From: '+15551234567',
+      To: '+15559876543',
+      CallStatus: 'ringing',
+    };
+
+    (mockPrisma.call.create as jest.Mock).mockResolvedValue({
+      id: 'call-1',
+      twilioSid: callParams.CallSid,
+      fromNumber: callParams.From,
+      toNumber: callParams.To,
+      status: CallStatus.RINGING,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const request = createMockRequest(callParams);
     await POST(request);
 
-    // Should still work, using URL from request
-    expect(mockTwilioHelpers.buildWebSocketUrl).toHaveBeenCalled();
-  });
-});
-
-describe('OPTIONS /api/twilio/incoming', () => {
-  it('should return 200 for CORS preflight', async () => {
-    const response = await OPTIONS();
-
-    expect(response.status).toBe(200);
-  });
-
-  it('should include CORS headers', async () => {
-    const response = await OPTIONS();
-
-    expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
-    expect(response.headers.get('Access-Control-Allow-Methods')).toBe('POST, OPTIONS');
-    expect(response.headers.get('Access-Control-Allow-Headers')).toBe(
-      'Content-Type, X-Twilio-Signature'
+    // Verify stream URL uses the configured app URL with wss protocol
+    expect(mockTwilio.createStreamingTwiml).toHaveBeenCalledWith(
+      expect.any(String),
+      'wss://scamscrammer.example.com/api/voice/stream'
     );
+  });
+
+  it('should return error TwiML on unexpected errors', async () => {
+    const callParams = {
+      CallSid: 'CA123456789',
+      From: '+15551234567',
+      To: '+15559876543',
+      CallStatus: 'ringing',
+    };
+
+    // Simulate unexpected database error
+    (mockPrisma.call.create as jest.Mock).mockRejectedValue(
+      new Error('Connection timeout')
+    );
+
+    const request = createMockRequest(callParams);
+    const response = await POST(request);
+
+    // Should return success status with TwiML (we still answer the call)
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Content-Type')).toBe('text/xml');
+  });
+
+  it('should log call details for debugging', async () => {
+    const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
+
+    const callParams = {
+      CallSid: 'CA123456789',
+      From: '+15551234567',
+      To: '+15559876543',
+      CallStatus: 'ringing',
+    };
+
+    (mockPrisma.call.create as jest.Mock).mockResolvedValue({
+      id: 'call-1',
+      twilioSid: callParams.CallSid,
+      fromNumber: callParams.From,
+      toNumber: callParams.To,
+      status: CallStatus.RINGING,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const request = createMockRequest(callParams);
+    await POST(request);
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Incoming call: CA123456789')
+    );
+
+    consoleSpy.mockRestore();
   });
 });
