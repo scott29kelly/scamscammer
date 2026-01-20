@@ -136,3 +136,62 @@
 - `scamscrammer/jest.config.mjs` - Jest configuration
 - `scamscrammer/jest.setup.js` - Jest setup
 - `scamscrammer/package.json` - Added test scripts and dependencies
+
+---
+
+## Task: Create Call Status Webhook Handler
+
+**Status:** Completed
+**Date:** 2026-01-19
+
+### What was done:
+
+1. **Created Twilio Call Status Webhook Handler**
+   - Created `src/app/api/twilio/status/route.ts` with POST handler
+   - Endpoint: `POST /api/twilio/status`
+   - Receives call status updates from Twilio
+
+2. **Status Mapping Implementation**
+   - Maps Twilio call statuses to application CallStatus enum:
+     - `queued`, `ringing` → `RINGING`
+     - `in-progress` → `IN_PROGRESS`
+     - `completed` → `COMPLETED`
+     - `busy`, `no-answer`, `canceled` → `NO_ANSWER`
+     - `failed` → `FAILED`
+
+3. **Request Handling Features**
+   - Supports both `application/x-www-form-urlencoded` (Twilio default) and `application/json` content types
+   - Validates required fields: CallSid, AccountSid, From, To, CallStatus, Direction
+   - Validates CallStatus is one of the expected Twilio values
+   - Parses optional CallDuration field when present
+
+4. **Database Operations**
+   - Finds existing call by twilioSid and updates status/duration
+   - Creates new call record if CallSid not found (handles race conditions when status callback arrives before incoming call handler)
+   - Properly handles duration as optional field
+
+5. **Error Handling**
+   - Returns 400 for invalid payloads with specific error codes
+   - Returns 409 for unique constraint violations (duplicate calls)
+   - Returns 500 for general database/server errors
+   - Comprehensive console logging for debugging
+
+6. **Comprehensive Test Suite**
+   - Created `src/app/api/twilio/status/__tests__/route.test.ts`
+   - 23 tests covering all functionality:
+     - Payload validation (4 tests)
+     - Status updates for existing calls (8 tests for all status mappings)
+     - Creating new calls (2 tests)
+     - Content-type handling (2 tests)
+     - Error handling (4 tests)
+     - Edge cases (3 tests including duration=0, international phone numbers)
+   - All tests pass
+
+7. **Added tsconfig.json**
+   - Created `tsconfig.json` for proper TypeScript path alias resolution
+   - Enables `@/*` imports to resolve to `./src/*`
+
+### Files created/modified:
+- `scamscrammer/src/app/api/twilio/status/route.ts` - Webhook handler (new)
+- `scamscrammer/src/app/api/twilio/status/__tests__/route.test.ts` - Tests (new)
+- `scamscrammer/tsconfig.json` - TypeScript configuration (new)
