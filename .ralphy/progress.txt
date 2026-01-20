@@ -67,3 +67,95 @@
 - `scamscrammer/jest.config.mjs` - Jest configuration
 - `scamscrammer/jest.setup.js` - Jest setup
 - `scamscrammer/package.json` - Added test scripts and dependencies
+
+---
+
+## Task: Create Deployment Configuration
+
+**Status:** Completed
+**Date:** 2026-01-19
+
+### What was done:
+
+1. **Created vercel.json configuration**
+   - Configured for Next.js framework
+   - Set region to `iad1` (US East)
+   - Configured function timeouts:
+     - Twilio webhooks: 30 seconds
+     - Voice streaming: 300 seconds (5 minutes for long calls)
+     - Health check: 10 seconds
+   - Added cache control headers for health and Twilio endpoints
+
+2. **Created next.config.js for production**
+   - Enabled React strict mode
+   - Removed powered-by header for security
+   - Configured image domains for AWS S3
+   - Added security headers (X-Frame-Options, X-Content-Type-Options, Referrer-Policy)
+   - Configured CORS for Twilio webhook routes
+   - Set up logging configuration for development
+
+3. **Created README.md documentation**
+   - Project overview and features
+   - Tech stack description
+   - Prerequisites and quick start guide
+   - Environment variables documentation with examples
+   - Twilio webhook configuration guide
+   - Project structure overview
+   - API endpoints documentation
+   - Deployment instructions for Vercel
+   - Development commands (tests, database, linting)
+   - Cost estimates per call
+
+4. **Updated .gitignore**
+   - Added exception for `.env.local.example`
+   - Added Prisma migrations directory
+   - Added IDE directories (.idea, .vscode)
+   - Added additional OS files (Thumbs.db)
+   - Added logs directory and log files
+
+5. **Created .env.local.example**
+   - Documented all required environment variables:
+     - DATABASE_URL (PostgreSQL)
+     - TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER
+     - OPENAI_API_KEY
+     - AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_BUCKET_NAME, AWS_REGION
+     - NEXT_PUBLIC_APP_URL
+     - NODE_ENV
+   - Added optional authentication variables
+   - Included helpful comments and example values
+
+6. **Created health check endpoint**
+   - Created `src/app/api/health/route.ts`
+   - Returns overall health status (healthy/degraded/unhealthy)
+   - Checks database connectivity with latency measurement
+   - Returns timestamp and version
+   - Returns HTTP 200 for healthy, 503 for unhealthy
+   - Exports HealthStatus TypeScript interface
+
+7. **Created health check tests**
+   - Created `src/app/api/health/__tests__/route.test.ts`
+   - Tests cover:
+     - Healthy status when database is connected
+     - Unhealthy status when database is down
+     - ISO timestamp format validation
+     - Non-Error exception handling
+     - Version in response
+   - All 5 tests pass
+
+8. **Created tsconfig.json**
+   - Required for Jest to resolve @/ path aliases
+   - Configured for Next.js with TypeScript strict mode
+   - Added path mapping for @/* -> ./src/*
+
+### Files created/modified:
+- `scamscrammer/vercel.json` - Vercel deployment configuration
+- `scamscrammer/next.config.js` - Next.js production configuration
+- `scamscrammer/README.md` - Project documentation
+- `scamscrammer/.gitignore` - Updated with additional entries
+- `scamscrammer/.env.local.example` - Environment variables template
+- `scamscrammer/tsconfig.json` - TypeScript configuration
+- `scamscrammer/src/app/api/health/route.ts` - Health check endpoint
+- `scamscrammer/src/app/api/health/__tests__/route.test.ts` - Health check tests
+
+### Test Results:
+All 9 tests pass (4 stats tests + 5 health tests)
