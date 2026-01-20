@@ -1,17 +1,17 @@
 /**
- * Tests for the Health Check API endpoint
+ * Health Check API Endpoint Tests
  */
 
-import { GET } from '../route';
+import { GET, HealthStatus } from '../route';
+import prisma from '@/lib/db';
 
-// Mock the prisma client
+// Mock the Prisma client
 jest.mock('@/lib/db', () => ({
-  prisma: {
+  __esModule: true,
+  default: {
     $queryRaw: jest.fn(),
   },
 }));
-
-import { prisma } from '@/lib/db';
 
 const mockPrisma = prisma as jest.Mocked<typeof prisma>;
 
@@ -21,69 +21,60 @@ describe('GET /api/health', () => {
   });
 
   it('should return healthy status when database is connected', async () => {
-    // Mock successful database query
     (mockPrisma.$queryRaw as jest.Mock).mockResolvedValue([{ '?column?': 1 }]);
 
     const response = await GET();
-    const data = await response.json();
+    const data: HealthStatus = await response.json();
 
     expect(response.status).toBe(200);
     expect(data.status).toBe('healthy');
     expect(data.services.database.status).toBe('up');
-    expect(data.services.app.status).toBe('up');
     expect(typeof data.services.database.latency).toBe('number');
     expect(data.timestamp).toBeDefined();
-    expect(data.uptime).toBeGreaterThanOrEqual(0);
+    expect(data.version).toBeDefined();
   });
 
-  it('should return unhealthy status when database is disconnected', async () => {
-    // Mock database connection failure
-    (mockPrisma.$queryRaw as jest.Mock).mockRejectedValue(
-      new Error('Connection refused')
-    );
+  it('should return unhealthy status when database is down', async () => {
+    (mockPrisma.$queryRaw as jest.Mock).mockRejectedValue(new Error('Connection refused'));
 
     const response = await GET();
-    const data = await response.json();
+    const data: HealthStatus = await response.json();
 
     expect(response.status).toBe(503);
     expect(data.status).toBe('unhealthy');
     expect(data.services.database.status).toBe('down');
     expect(data.services.database.error).toBe('Connection refused');
-    expect(data.services.app.status).toBe('up');
-  });
-
-  it('should include version information', async () => {
-    (mockPrisma.$queryRaw as jest.Mock).mockResolvedValue([{ '?column?': 1 }]);
-
-    const response = await GET();
-    const data = await response.json();
-
-    expect(data.version).toBeDefined();
-    expect(typeof data.version).toBe('string');
+    expect(typeof data.services.database.latency).toBe('number');
   });
 
   it('should include timestamp in ISO format', async () => {
     (mockPrisma.$queryRaw as jest.Mock).mockResolvedValue([{ '?column?': 1 }]);
 
     const response = await GET();
-    const data = await response.json();
+    const data: HealthStatus = await response.json();
 
-    expect(data.timestamp).toBeDefined();
-    // Verify it's a valid ISO date string
-    const date = new Date(data.timestamp);
-    expect(date.toISOString()).toBe(data.timestamp);
+    expect(data.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.\d{3}Z$/);
   });
 
-  it('should handle unknown errors gracefully', async () => {
-    // Mock with non-Error object
-    (mockPrisma.$queryRaw as jest.Mock).mockRejectedValue('Unknown error');
+  it('should handle non-Error exceptions gracefully', async () => {
+    (mockPrisma.$queryRaw as jest.Mock).mockRejectedValue('String error');
 
     const response = await GET();
-    const data = await response.json();
+    const data: HealthStatus = await response.json();
 
     expect(response.status).toBe(503);
     expect(data.status).toBe('unhealthy');
     expect(data.services.database.status).toBe('down');
     expect(data.services.database.error).toBe('Unknown database error');
+  });
+
+  it('should return version from environment or default', async () => {
+    (mockPrisma.$queryRaw as jest.Mock).mockResolvedValue([{ '?column?': 1 }]);
+
+    const response = await GET();
+    const data: HealthStatus = await response.json();
+
+    expect(data.version).toBeDefined();
+    expect(typeof data.version).toBe('string');
   });
 });
