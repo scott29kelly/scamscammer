@@ -1,5 +1,93 @@
 # Ralphy Progress Log
 
+## Task: Add Authentication and Route Protection
+
+**Status:** Completed
+**Date:** 2026-01-19
+
+### What was done:
+
+1. **Created authentication utilities module**
+   - Created `src/lib/auth.ts` with:
+     - Password validation using `DASHBOARD_PASSWORD` environment variable
+     - Session token generation with timestamp and password hash
+     - Session validation with 7-day expiration
+     - Cookie-based session management (httpOnly, secure in production)
+     - Route protection helpers (`isProtectedRoute`, `isLoginRoute`, `isApiRoute`)
+     - Request authentication checking for middleware
+
+2. **Created login page**
+   - Created `src/app/login/page.tsx` React client component
+   - Dark theme UI matching the dashboard design
+   - Form with password input and submit button
+   - Loading state and error handling
+   - Redirect to `/calls` after successful login
+   - Uses fetch API to call login endpoint
+
+3. **Created authentication API routes**
+   - Created `src/app/api/auth/login/route.ts`:
+     - POST handler to authenticate with password
+     - Returns 400 for missing password
+     - Returns 401 for invalid password
+     - Returns 200 and creates session for valid password
+     - Proper error handling with 500 response on failure
+   - Created `src/app/api/auth/logout/route.ts`:
+     - POST handler to clear authentication session
+     - Destroys session cookie
+
+4. **Created Next.js middleware for route protection**
+   - Created `src/middleware.ts` with:
+     - Protection for `/calls/*` and `/api/calls/*` routes
+     - JSON 401 response for unauthorized API requests
+     - Redirect to `/login` for unauthorized page requests
+     - Preserves redirect URL in query parameter
+     - Does NOT protect Twilio webhooks (`/api/twilio/*`, `/api/voice/*`)
+     - Does NOT protect public routes (`/api/stats`, `/api/health`, `/api/auth/*`)
+
+5. **Added authentication environment variables**
+   - Created `.env.example` with `DASHBOARD_PASSWORD` variable
+   - Includes all other expected environment variables documented
+
+6. **Created TypeScript configuration**
+   - Created `tsconfig.json` with path alias support (`@/*` -> `./src/*`)
+   - Configured for Next.js App Router with strict mode
+
+7. **Created comprehensive tests**
+   - Created `src/lib/__tests__/auth.test.ts` (19 test cases):
+     - Password validation tests (correct/incorrect/missing/empty)
+     - Session token generation tests
+     - Session validation tests (empty/malformed/expired/valid/wrong hash)
+     - Route protection pattern tests
+     - Login route detection tests
+     - API route detection tests
+   - Created `src/app/api/auth/login/__tests__/route.test.ts` (4 test cases):
+     - Missing password returns 400
+     - Invalid password returns 401
+     - Valid password returns 200 and creates session
+     - Session creation failure returns 500
+   - All 23 tests pass
+
+### Files created:
+- `scamscrammer/src/lib/auth.ts` - Authentication utilities module
+- `scamscrammer/src/app/login/page.tsx` - Login page component
+- `scamscrammer/src/app/api/auth/login/route.ts` - Login API endpoint
+- `scamscrammer/src/app/api/auth/logout/route.ts` - Logout API endpoint
+- `scamscrammer/src/middleware.ts` - Route protection middleware
+- `scamscrammer/.env.example` - Environment variables template
+- `scamscrammer/tsconfig.json` - TypeScript configuration
+- `scamscrammer/src/lib/__tests__/auth.test.ts` - Auth module tests
+- `scamscrammer/src/app/api/auth/login/__tests__/route.test.ts` - Login route tests
+
+### Security considerations:
+- Session cookies are httpOnly (not accessible via JavaScript)
+- Secure flag enabled in production (HTTPS only)
+- SameSite=lax for CSRF protection
+- 7-day session expiration
+- Twilio webhooks remain unprotected (use Twilio signature validation instead)
+- Simple password-based auth as specified (MVP level)
+
+---
+
 ## Task: Create Stats API Endpoint
 
 **Status:** Completed
