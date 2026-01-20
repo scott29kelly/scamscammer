@@ -67,3 +67,82 @@
 - `scamscrammer/jest.config.mjs` - Jest configuration
 - `scamscrammer/jest.setup.js` - Jest setup
 - `scamscrammer/package.json` - Added test scripts and dependencies
+
+---
+
+## Task: Create Call Detail Page with Audio Player
+
+**Status:** Completed
+**Date:** 2026-01-19
+
+### What was done:
+
+1. **Created CallPlayer component** (`src/components/CallPlayer.tsx`)
+   - Full-featured HTML5 audio player for call recordings
+   - Play/pause button with loading state
+   - Seek bar with current time and duration display
+   - Volume control with mute toggle
+   - Playback speed selector (0.5x, 0.75x, 1x, 1.25x, 1.5x, 2x)
+   - Download button for saving recordings
+   - Exposes `seekAudio` function on window for external seeking (transcript sync)
+   - Handles missing recordings gracefully
+   - Error state for failed audio loads
+   - Responsive dark-themed UI with Tailwind CSS
+
+2. **Created TranscriptViewer component** (`src/components/TranscriptViewer.tsx`)
+   - Displays call transcript segments with timestamps
+   - Color-coded speakers (Earl/AI in indigo, Scammer in red)
+   - Auto-scrolls to active segment during playback
+   - Clickable segments to seek audio to that timestamp
+   - Keyboard accessible (Enter/Space to seek)
+   - Shows segment count in header
+   - Legend for speaker color coding
+   - Handles empty transcripts gracefully
+
+3. **Created Call Detail page** (`src/app/calls/[id]/page.tsx`)
+   - Dynamic route at `/calls/[id]`
+   - Displays call metadata (from/to numbers, duration, date, status)
+   - Integrates CallPlayer and TranscriptViewer components
+   - Audio-transcript synchronization (transcript follows playback)
+   - Entertainment rating widget (1-5 stars, clickable)
+   - Notes textarea for call annotations
+   - Tags display
+   - Save button for persisting rating/notes changes
+   - Delete button with confirmation dialog
+   - Loading and error states
+   - Back navigation to call list
+   - Responsive layout (2-column on large screens)
+
+4. **Created Single Call API endpoint** (`src/app/api/calls/[id]/route.ts`)
+   - **GET /api/calls/[id]** - Fetch call with all segments (ordered by timestamp)
+   - **PATCH /api/calls/[id]** - Update rating, notes, or tags
+     - Validates rating (1-5 or null)
+     - Validates notes (string or null)
+     - Validates tags (array of strings)
+   - **DELETE /api/calls/[id]** - Delete call (cascades to segments)
+   - All endpoints return 404 for non-existent calls
+   - Proper error handling with 500 responses
+
+5. **Created comprehensive API tests** (`src/app/api/calls/[id]/__tests__/route.test.ts`)
+   - 19 tests covering all endpoints:
+     - GET: success, 404, 500 error, missing recording
+     - PATCH: update rating, notes, tags, multiple fields, null rating, validation errors (invalid rating, notes, tags), 404, 500 error
+     - DELETE: success, 404, 500 error
+   - All tests pass
+
+6. **Created tsconfig.json** - TypeScript configuration with path aliases
+
+7. **Created eslint.config.mjs** - ESLint 9 flat config for linting
+
+### Files created:
+- `scamscrammer/src/components/CallPlayer.tsx` - Audio player component
+- `scamscrammer/src/components/TranscriptViewer.tsx` - Transcript display component
+- `scamscrammer/src/app/calls/[id]/page.tsx` - Call detail page
+- `scamscrammer/src/app/api/calls/[id]/route.ts` - Single call API endpoints
+- `scamscrammer/src/app/api/calls/[id]/__tests__/route.test.ts` - API tests
+- `scamscrammer/tsconfig.json` - TypeScript configuration
+- `scamscrammer/eslint.config.mjs` - ESLint configuration
+
+### Test results:
+- All 23 tests pass (4 stats + 19 call detail)
+- ESLint passes with no errors
