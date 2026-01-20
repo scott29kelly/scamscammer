@@ -64,20 +64,118 @@ Implemented the Calls REST API endpoints for the ScamScrammer project, enabling 
 - `scamscrammer/src/app/api/calls/[id]/route.ts` - Individual call endpoints
 - `scamscrammer/src/__tests__/api/calls.test.ts` - API tests
 - `scamscrammer/jest.config.mjs` - Jest configuration
-- `scamscrammer/jest.setup.js` - Jest setup file
-- `scamscrammer/package.json` - Added test scripts
+- `scamscrammer/jest.setup.js` - Jest setup
+- `scamscrammer/package.json` - Added test scripts and dependencies
 
-### API Endpoints Implemented
-```
-GET  /api/calls              - List all calls (paginated, filterable, sortable)
-GET  /api/calls/:id          - Get single call with segments
-PATCH /api/calls/:id         - Update rating, notes, tags
-DELETE /api/calls/:id        - Delete call and recording
-```
+---
 
-### Test Results
-All 18 tests passing:
-- GET /api/calls: 6 tests
-- GET /api/calls/[id]: 2 tests
-- PATCH /api/calls/[id]: 6 tests
-- DELETE /api/calls/[id]: 3 tests
+## Task: Create Call List Component and Page
+
+**Status:** Completed
+**Date:** 2026-01-19
+
+### What was done:
+
+1. **Created Calls API endpoint (`/api/calls`)**
+   - Created `src/app/api/calls/route.ts` with GET handler
+   - Features:
+     - Pagination with `page` and `limit` params (max 100 per page)
+     - Status filtering via `status` query param
+     - Date range filtering via `startDate` and `endDate` params
+     - Search functionality (searches fromNumber, toNumber, notes)
+     - Sorting by `createdAt`, `duration`, or `rating` (ascending/descending)
+   - Returns `CallListResponse` with paginated calls and pagination metadata
+   - Includes segment count (`_count.segments`) for each call
+   - Proper error handling with 500 response on database errors
+
+2. **Created CallList component (`src/components/CallList.tsx`)**
+   - Reusable React component for displaying calls in a table
+   - Features:
+     - Table display with Date, From, Status, Duration, Rating, Segments columns
+     - Status filter buttons (All, RINGING, IN_PROGRESS, COMPLETED, FAILED, NO_ANSWER)
+     - Sort dropdown and clickable column headers
+     - Pagination controls with page numbers
+     - Loading skeleton state
+     - Empty state with helpful messages
+     - Phone number formatting (US format)
+     - Duration formatting (mm:ss)
+     - Rating display as stars
+     - Status badges with color coding
+     - Click handler for row navigation
+   - Fully typed with TypeScript
+   - Tailwind CSS styling with dark mode support
+
+3. **Created Calls page (`/calls`)**
+   - Created `src/app/calls/page.tsx` as a client component
+   - Features:
+     - Fetches data from `/api/calls` endpoint
+     - URL state management for filters (page, status, sortBy, sortOrder, search)
+     - Search bar with text input
+     - Loading and error states
+     - Click navigation to call detail pages
+   - Uses CallList component for display
+   - Responsive layout with max-width container
+
+4. **Added tsconfig.json**
+   - Created TypeScript configuration for the project
+   - Configured path aliases (`@/*`)
+   - Added types for Jest and testing-library
+
+5. **Enhanced Jest configuration**
+   - Updated `jest.config.mjs` with project-based configuration
+   - Separate environments for API tests (node) and component tests (jsdom)
+   - Added JSX support for component tests
+   - Updated `jest.setup.js` with TextEncoder polyfill for jsdom
+
+6. **Installed testing dependencies**
+   - Added `@testing-library/react` for component testing
+   - Added `jest-environment-jsdom` for browser-like test environment
+
+7. **Created comprehensive tests**
+
+   **API Tests (`src/app/api/calls/__tests__/route.test.ts`):**
+   - Returns paginated calls list
+   - Handles page and limit parameters
+   - Filters by status
+   - Filters by date range
+   - Handles search parameter
+   - Handles sort parameters
+   - Defaults to sorting by createdAt desc
+   - Handles empty results
+   - Returns 500 on database error
+   - Enforces maximum limit of 100
+   - Enforces minimum page of 1
+   - Ignores invalid status values
+   - Includes segment count in response
+   - All 13 tests pass
+
+   **Component Tests (`src/components/__tests__/CallList.test.tsx`):**
+   - Renders calls in a table
+   - Shows empty state when no calls
+   - Shows loading state
+   - Handles pagination correctly
+   - Handles row click
+   - Shows status filter buttons
+   - Handles status filter click
+   - Shows empty state with filter message
+   - Formats duration correctly
+   - Displays rating stars correctly
+   - Shows sort controls
+   - Handles sort dropdown interaction
+   - Handles column header click for sorting
+   - Toggles sort order when clicking same column
+   - Formats phone numbers correctly
+   - Shows correct page numbers in pagination
+   - Handles page number click
+   - All 17 tests pass
+
+### Files created/modified:
+- `scamscrammer/src/app/api/calls/route.ts` - Calls API endpoint
+- `scamscrammer/src/app/api/calls/__tests__/route.test.ts` - API tests
+- `scamscrammer/src/components/CallList.tsx` - CallList component
+- `scamscrammer/src/components/__tests__/CallList.test.tsx` - Component tests
+- `scamscrammer/src/app/calls/page.tsx` - Calls page
+- `scamscrammer/tsconfig.json` - TypeScript configuration
+- `scamscrammer/jest.config.mjs` - Updated Jest configuration
+- `scamscrammer/jest.setup.js` - Updated Jest setup with TextEncoder polyfill
+- `scamscrammer/package.json` - Added testing-library dependencies

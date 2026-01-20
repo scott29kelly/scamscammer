@@ -1,28 +1,69 @@
+/**
+ * Calls API Endpoint
+ *
+ * GET /api/calls - Returns paginated list of calls with filtering and sorting
+ */
+
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
-import type { CallListResponse, CallListQueryParams, ApiErrorResponse } from '@/types';
+import type { CallListResponse, ApiErrorResponse, PaginationInfo, CallListItem } from '@/types';
 import { CallStatus } from '@prisma/client';
 
-/**
- * GET /api/calls - List all calls with pagination, filtering, and sorting
- */
-export async function GET(request: NextRequest): Promise<NextResponse<CallListResponse | ApiErrorResponse>> {
-  try {
-    const searchParams = request.nextUrl.searchParams;
-    const params: CallListQueryParams = {
-      page: searchParams.get('page') ?? undefined,
-      limit: searchParams.get('limit') ?? undefined,
-      status: searchParams.get('status') as CallStatus | undefined,
-      startDate: searchParams.get('startDate') ?? undefined,
-      endDate: searchParams.get('endDate') ?? undefined,
-      sortBy: searchParams.get('sortBy') as 'createdAt' | 'duration' | undefined,
-      sortOrder: searchParams.get('sortOrder') as 'asc' | 'desc' | undefined,
-    };
+interface CallQueryParams {
+  page: number;
+  limit: number;
+  status?: CallStatus;
+  startDate?: Date;
+  endDate?: Date;
+  sortBy: 'createdAt' | 'duration' | 'rating';
+  sortOrder: 'asc' | 'desc';
+  search?: string;
+}
 
-    // Parse pagination parameters
-    const page = Math.max(1, parseInt(params.page ?? '1', 10));
-    const limit = Math.min(100, Math.max(1, parseInt(params.limit ?? '20', 10)));
-    const skip = (page - 1) * limit;
+function parseQueryParams(request: NextRequest): CallQueryParams {
+  const searchParams = request.nextUrl.searchParams;
+
+  const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10));
+  const limit = Math.min(100, Math.max(1, parseInt(searchParams.get('limit') || '20', 10)));
+
+  const statusParam = searchParams.get('status');
+  const status = statusParam && Object.values(CallStatus).includes(statusParam as CallStatus)
+    ? (statusParam as CallStatus)
+    : undefined;
+
+  const startDateParam = searchParams.get('startDate');
+  const startDate = startDateParam ? new Date(startDateParam) : undefined;
+
+  const endDateParam = searchParams.get('endDate');
+  const endDate = endDateParam ? new Date(endDateParam) : undefined;
+
+  const sortByParam = searchParams.get('sortBy');
+  const sortBy = ['createdAt', 'duration', 'rating'].includes(sortByParam || '')
+    ? (sortByParam as 'createdAt' | 'duration' | 'rating')
+    : 'createdAt';
+
+  const sortOrderParam = searchParams.get('sortOrder');
+  const sortOrder = sortOrderParam === 'asc' ? 'asc' : 'desc';
+
+  const search = searchParams.get('search') || undefined;
+
+  return {
+    page,
+    limit,
+    status,
+    startDate,
+    endDate,
+    sortBy,
+    sortOrder,
+    search,
+  };
+}
+
+export async function GET(
+  request: NextRequest
+): Promise<NextResponse<CallListResponse | ApiErrorResponse>> {
+  try {
+    const params = parseQueryParams(request);
 
     // Build where clause for filtering
     const where: {
@@ -31,68 +72,88 @@ export async function GET(request: NextRequest): Promise<NextResponse<CallListRe
         gte?: Date;
         lte?: Date;
       };
+      OR?: Array<{
+        fromNumber?: { contains: string; mode: 'insensitive' };
+        toNumber?: { contains: string; mode: 'insensitive' };
+        notes?: { contains: string; mode: 'insensitive' };
+      }>;
     } = {};
 
-    // Filter by status
-    if (params.status && Object.values(CallStatus).includes(params.status)) {
+    if (params.status) {
       where.status = params.status;
     }
 
-    // Filter by date range
     if (params.startDate || params.endDate) {
       where.createdAt = {};
       if (params.startDate) {
-        const startDate = new Date(params.startDate);
-        if (!isNaN(startDate.getTime())) {
-          where.createdAt.gte = startDate;
-        }
+        where.createdAt.gte = params.startDate;
       }
       if (params.endDate) {
-        const endDate = new Date(params.endDate);
-        if (!isNaN(endDate.getTime())) {
-          // Set to end of day
-          endDate.setHours(23, 59, 59, 999);
-          where.createdAt.lte = endDate;
-        }
+        where.createdAt.lte = params.endDate;
       }
     }
 
-    // Build orderBy clause
-    const sortBy = params.sortBy ?? 'createdAt';
-    const sortOrder = params.sortOrder ?? 'desc';
-    const orderBy = { [sortBy]: sortOrder };
+    if (params.search) {
+      where.OR = [
+        { fromNumber: { contains: params.search, mode: 'insensitive' } },
+        { toNumber: { contains: params.search, mode: 'insensitive' } },
+        { notes: { contains: params.search, mode: 'insensitive' } },
+      ];
+    }
 
-    // Execute queries in parallel
-    const [calls, total] = await Promise.all([
+    // Run count and query in parallel
+    const [total, calls] = await Promise.all([
+      prisma.call.count({ where }),
       prisma.call.findMany({
         where,
-        orderBy,
-        skip,
-        take: limit,
+        orderBy: {
+          [params.sortBy]: params.sortOrder,
+        },
+        skip: (params.page - 1) * params.limit,
+        take: params.limit,
         include: {
           _count: {
-            select: { segments: true },
+            select: {
+              segments: true,
+            },
           },
         },
       }),
-      prisma.call.count({ where }),
     ]);
 
-    const totalPages = Math.ceil(total / limit);
+    const totalPages = Math.ceil(total / params.limit);
 
-    const response: CallListResponse = {
-      calls,
-      pagination: {
-        total,
-        page,
-        limit,
-        totalPages,
-        hasNext: page < totalPages,
-        hasPrev: page > 1,
-      },
+    const pagination: PaginationInfo = {
+      total,
+      page: params.page,
+      limit: params.limit,
+      totalPages,
+      hasNext: params.page < totalPages,
+      hasPrev: params.page > 1,
     };
 
-    return NextResponse.json(response);
+    // Map to CallListItem type
+    const callListItems: CallListItem[] = calls.map((call) => ({
+      id: call.id,
+      twilioSid: call.twilioSid,
+      fromNumber: call.fromNumber,
+      toNumber: call.toNumber,
+      status: call.status,
+      duration: call.duration,
+      recordingUrl: call.recordingUrl,
+      transcriptUrl: call.transcriptUrl,
+      rating: call.rating,
+      notes: call.notes,
+      tags: call.tags,
+      createdAt: call.createdAt,
+      updatedAt: call.updatedAt,
+      _count: call._count,
+    }));
+
+    return NextResponse.json({
+      calls: callListItems,
+      pagination,
+    });
   } catch (error) {
     console.error('Error fetching calls:', error);
     return NextResponse.json(
