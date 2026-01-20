@@ -30,7 +30,7 @@ import type {
   TwilioStreamMediaEvent,
   TwilioStreamOutgoingMedia,
   TwilioStreamClear,
-} from '@/types';
+} from '@/lib/twilio';
 
 // =============================================================================
 // Types
@@ -383,19 +383,19 @@ async function handleTwilioMessage(
       break;
 
     case 'start':
-      await handleStart(twilioWs, event);
+      await handleStart(twilioWs, event as TwilioStreamStartEvent);
       break;
 
     case 'media':
-      handleMedia(event);
+      handleMedia(event as TwilioStreamMediaEvent);
       break;
 
     case 'stop':
-      await handleStop(event);
+      await handleStop(event as TwilioStreamEvent);
       break;
 
     case 'mark':
-      console.log('[Voice Stream] Mark received:', event.mark?.name);
+      console.log('[Voice Stream] Mark received:', (event as { mark?: { name?: string } }).mark?.name);
       break;
 
     default:

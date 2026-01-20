@@ -164,7 +164,7 @@ export class StorageClient {
         ...headers,
         Authorization: authorization,
       },
-      body: data,
+      body: new Uint8Array(data),
     });
 
     if (!response.ok) {

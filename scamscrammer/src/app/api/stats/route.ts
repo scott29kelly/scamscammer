@@ -181,18 +181,5 @@ export async function GET(): Promise<NextResponse<DashboardStats | ApiErrorRespo
       formatErrorResponse(dbError),
       { status: getErrorStatusCode(dbError) }
     );
-
-    requestMonitoring.recordError();
-
-    // Wrap database errors for proper handling
-    const appError = error instanceof DatabaseError ? error : wrapPrismaError(error);
-
-    const errorResponse = formatErrorResponse(appError, requestId);
-
-    return NextResponse.json(errorResponse, {
-      status: getErrorStatusCode(appError),
-    });
-  } finally {
-    clearRequestContext();
   }
 }

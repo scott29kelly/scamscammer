@@ -63,9 +63,7 @@ function setupPrismaEvents(client: PrismaClient): void {
   // Always log errors
   // @ts-expect-error - Prisma event types not fully exposed
   client.$on('error', (e: { message: string; target?: string }) => {
-    dbLogger.error('Database error', new Error(e.message), {
-      target: e.target,
-    });
+    dbLogger.error('Database error', { target: e.target }, new Error(e.message));
 
     monitoring.incrementCounter('database.error', 1, {
       target: e.target || 'unknown',
@@ -118,10 +116,7 @@ export async function testDatabaseConnection(): Promise<boolean> {
     dbLogger.debug('Database connection test successful');
     return true;
   } catch (error) {
-    dbLogger.error(
-      'Database connection test failed',
-      error instanceof Error ? error : new Error(String(error))
-    );
+    dbLogger.logError(error, 'Database connection test failed');
     throw error;
   }
 }
@@ -134,10 +129,7 @@ export async function disconnectDatabase(): Promise<void> {
     await prisma.$disconnect();
     dbLogger.info('Database disconnected gracefully');
   } catch (error) {
-    dbLogger.error(
-      'Error disconnecting from database',
-      error instanceof Error ? error : new Error(String(error))
-    );
+    dbLogger.logError(error, 'Error disconnecting from database');
     throw error;
   }
 }

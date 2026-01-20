@@ -5,15 +5,6 @@
 import { GET } from '../route';
 import prisma from '@/lib/db';
 
-// Mock CallStatus enum
-const CallStatus = {
-  RINGING: 'RINGING',
-  IN_PROGRESS: 'IN_PROGRESS',
-  COMPLETED: 'COMPLETED',
-  FAILED: 'FAILED',
-  NO_ANSWER: 'NO_ANSWER',
-} as const;
-
 // Define CallStatus enum to match Prisma schema
 const CallStatus = {
   RINGING: 'RINGING',
@@ -25,36 +16,31 @@ const CallStatus = {
 
 type CallStatusType = (typeof CallStatus)[keyof typeof CallStatus];
 
-type CallStatusType = typeof CallStatus[keyof typeof CallStatus];
-
-// Mock the Prisma client BEFORE imports
-const mockPrismaClient = {
-  call: {
-    count: jest.fn(),
-    aggregate: jest.fn(),
-    groupBy: jest.fn(),
-    findMany: jest.fn(),
-  },
-  $queryRaw: jest.fn(),
-};
-
+// Mock the Prisma client - define inside factory to avoid hoisting issues
 jest.mock('../../../../lib/db', () => ({
   __esModule: true,
-  default: mockPrismaClient,
+  default: {
+    call: {
+      count: jest.fn(),
+      aggregate: jest.fn(),
+      groupBy: jest.fn(),
+      findMany: jest.fn(),
+    },
+    $queryRaw: jest.fn(),
+  },
 }));
 
 // Mock the logger
 jest.mock('@/lib/logger', () => ({
-  __esModule: true,
-  logger: {
-    debug: jest.fn(),
-    info: jest.fn(),
-    warn: jest.fn(),
-    error: jest.fn(),
+  apiLogger: {
+    forRequest: jest.fn(() => ({
+      debug: jest.fn(),
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+      logError: jest.fn(),
+    })),
   },
-  generateRequestId: jest.fn().mockReturnValue('test-request-id'),
-  setRequestContext: jest.fn(),
-  clearRequestContext: jest.fn(),
 }));
 
 // Mock the monitoring
@@ -87,19 +73,6 @@ jest.mock('@prisma/client', () => ({
   Speaker: {
     SCAMMER: 'SCAMMER',
     EARL: 'EARL',
-  },
-}));
-
-// Mock the logger
-jest.mock('@/lib/logger', () => ({
-  apiLogger: {
-    forRequest: jest.fn(() => ({
-      debug: jest.fn(),
-      info: jest.fn(),
-      warn: jest.fn(),
-      error: jest.fn(),
-      logError: jest.fn(),
-    })),
   },
 }));
 

@@ -5,91 +5,84 @@
  * between Twilio and OpenAI Realtime API.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type {
   TwilioStreamStartEvent,
   TwilioStreamMediaEvent,
-  TwilioStreamStopEvent,
-  TwilioStreamConnectedEvent,
-} from '@/types';
+} from '@/lib/twilio';
 
 // =============================================================================
-// Mocks - Using vi.hoisted to ensure proper hoisting
+// Mocks
 // =============================================================================
 
-const { mockOpenAIClientInstance, mockPrismaInstance, mockWebSocketInstance } = vi.hoisted(() => {
-  // Create listeners map for mock event emitter
-  const listeners = new Map<string, ((...args: unknown[]) => void)[]>();
+// Create listeners map for mock event emitter
+const listeners = new Map<string, ((...args: unknown[]) => void)[]>();
 
-  // Create mock instances with EventEmitter-like methods
-  const mockOpenAIClientInstance = {
-    connect: vi.fn().mockResolvedValue(undefined),
-    disconnect: vi.fn(),
-    sendAudio: vi.fn(),
-    isConnected: vi.fn().mockReturnValue(true),
-    getState: vi.fn().mockReturnValue('connected'),
-    on: vi.fn((event: string, callback: (...args: unknown[]) => void) => {
-      const handlers = listeners.get(event) || [];
-      handlers.push(callback);
-      listeners.set(event, handlers);
-      return mockOpenAIClientInstance;
-    }),
-    off: vi.fn((event: string, callback: (...args: unknown[]) => void) => {
-      const handlers = listeners.get(event) || [];
-      const index = handlers.indexOf(callback);
-      if (index > -1) {
-        handlers.splice(index, 1);
-      }
-      return mockOpenAIClientInstance;
-    }),
-    emit: vi.fn((event: string, ...args: unknown[]) => {
-      const handlers = listeners.get(event) || [];
-      handlers.forEach((handler) => handler(...args));
-      return handlers.length > 0;
-    }),
-    removeAllListeners: vi.fn(() => {
-      listeners.clear();
-      return mockOpenAIClientInstance;
-    }),
-  };
+// Create mock instances with EventEmitter-like methods
+const mockOpenAIClientInstance = {
+  connect: jest.fn().mockResolvedValue(undefined),
+  disconnect: jest.fn(),
+  sendAudio: jest.fn(),
+  isConnected: jest.fn().mockReturnValue(true),
+  getState: jest.fn().mockReturnValue('connected'),
+  on: jest.fn((event: string, callback: (...args: unknown[]) => void) => {
+    const handlers = listeners.get(event) || [];
+    handlers.push(callback);
+    listeners.set(event, handlers);
+    return mockOpenAIClientInstance;
+  }),
+  off: jest.fn((event: string, callback: (...args: unknown[]) => void) => {
+    const handlers = listeners.get(event) || [];
+    const index = handlers.indexOf(callback);
+    if (index > -1) {
+      handlers.splice(index, 1);
+    }
+    return mockOpenAIClientInstance;
+  }),
+  emit: jest.fn((event: string, ...args: unknown[]) => {
+    const handlers = listeners.get(event) || [];
+    handlers.forEach((handler) => handler(...args));
+    return handlers.length > 0;
+  }),
+  removeAllListeners: jest.fn(() => {
+    listeners.clear();
+    return mockOpenAIClientInstance;
+  }),
+};
 
-  const mockPrismaInstance = {
-    call: {
-      findUnique: vi.fn(),
-      update: vi.fn(),
-    },
-    callSegment: {
-      create: vi.fn(),
-    },
-  };
+const mockPrismaInstance = {
+  call: {
+    findUnique: jest.fn(),
+    update: jest.fn(),
+  },
+  callSegment: {
+    create: jest.fn(),
+  },
+};
 
-  const mockWebSocketInstance = {
-    send: vi.fn(),
-    close: vi.fn(),
-    readyState: 1, // WebSocket.OPEN
-    OPEN: 1,
-    CLOSED: 3,
-  };
+const mockWebSocketInstance = {
+  send: jest.fn(),
+  close: jest.fn(),
+  readyState: 1, // WebSocket.OPEN
+  OPEN: 1,
+  CLOSED: 3,
+};
 
-  return { mockOpenAIClientInstance, mockPrismaInstance, mockWebSocketInstance };
-});
-
-// Setup mocks
-vi.mock('@/lib/openai', () => ({
-  createEarlClient: vi.fn(() => mockOpenAIClientInstance),
-  OpenAIRealtimeClient: vi.fn(() => mockOpenAIClientInstance),
+// Setup mocks before imports
+jest.mock('@/lib/openai', () => ({
+  createEarlClient: jest.fn(() => mockOpenAIClientInstance),
+  OpenAIRealtimeClient: jest.fn(() => mockOpenAIClientInstance),
 }));
 
-vi.mock('@/lib/db', () => ({
+jest.mock('@/lib/db', () => ({
   prisma: mockPrismaInstance,
 }));
 
-vi.mock('ws', () => ({
-  WebSocket: vi.fn(() => mockWebSocketInstance),
-  WebSocketServer: vi.fn(() => ({
-    handleUpgrade: vi.fn(),
-    emit: vi.fn(),
-    on: vi.fn(),
+jest.mock('ws', () => ({
+  WebSocket: jest.fn(() => mockWebSocketInstance),
+  WebSocketServer: jest.fn(() => ({
+    handleUpgrade: jest.fn(),
+    emit: jest.fn(),
+    on: jest.fn(),
   })),
 }));
 
@@ -103,6 +96,22 @@ import { POST, __testing__ } from '../route';
 const mockCallId = 'test-call-id-123';
 const mockCallSid = 'CA1234567890abcdef1234567890abcdef';
 const mockStreamSid = 'MZ1234567890abcdef1234567890abcdef';
+
+interface TwilioStreamConnectedEvent {
+  event: 'connected';
+  protocol: string;
+  version: string;
+}
+
+interface TwilioStreamStopEvent {
+  event: 'stop';
+  sequenceNumber: string;
+  streamSid: string;
+  stop: {
+    accountSid: string;
+    callSid: string;
+  };
+}
 
 const createConnectedEvent = (): TwilioStreamConnectedEvent => ({
   event: 'connected',
@@ -156,7 +165,8 @@ const createStopEvent = (): TwilioStreamStopEvent => ({
 
 describe('Voice Stream Handler', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    jest.clearAllMocks();
+    listeners.clear();
 
     // Reset module state
     __testing__.activeSessions.clear();
@@ -188,7 +198,7 @@ describe('Voice Stream Handler', () => {
   });
 
   afterEach(() => {
-    vi.clearAllMocks();
+    jest.clearAllMocks();
   });
 
   describe('POST endpoint (health check)', () => {
@@ -226,7 +236,7 @@ describe('Voice Stream Handler', () => {
 
   describe('handleTwilioMessage', () => {
     it('should handle connected event', async () => {
-      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
       const event = createConnectedEvent();
 
       await __testing__.handleTwilioMessage(
@@ -246,7 +256,7 @@ describe('Voice Stream Handler', () => {
     });
 
     it('should handle invalid JSON gracefully', async () => {
-      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 
       await __testing__.handleTwilioMessage(
         mockWebSocketInstance as unknown as WebSocket,
@@ -281,7 +291,7 @@ describe('Voice Stream Handler', () => {
 
     it('should handle call not found in database', async () => {
       mockPrismaInstance.call.findUnique.mockResolvedValue(null);
-      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const consoleSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
 
       const startEvent = createStartEvent();
       const session = await __testing__.createSession(
@@ -300,7 +310,7 @@ describe('Voice Stream Handler', () => {
 
     it('should handle database errors gracefully', async () => {
       mockPrismaInstance.call.findUnique.mockRejectedValue(new Error('Database error'));
-      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 
       const startEvent = createStartEvent();
       const session = await __testing__.createSession(
@@ -319,7 +329,7 @@ describe('Voice Stream Handler', () => {
 
     it('should throw error if OpenAI connection fails', async () => {
       mockOpenAIClientInstance.connect.mockRejectedValue(new Error('OpenAI connection failed'));
-      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 
       const startEvent = createStartEvent();
 
@@ -374,7 +384,7 @@ describe('Voice Stream Handler', () => {
 
     it('should handle database errors gracefully', async () => {
       mockPrismaInstance.callSegment.create.mockRejectedValue(new Error('DB error'));
-      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 
       await __testing__.saveTranscriptSegment(mockCallId, 'EARL', 'Test');
 
@@ -410,7 +420,7 @@ describe('Voice Stream Handler', () => {
     });
 
     it('should handle OpenAI sendAudio errors gracefully', async () => {
-      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
       mockOpenAIClientInstance.sendAudio.mockImplementation(() => {
         throw new Error('Send audio failed');
       });

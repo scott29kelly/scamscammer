@@ -341,9 +341,13 @@ export const monitoring = {
 
   /**
    * Get current memory usage
+   * Returns empty object in Edge runtime where process.memoryUsage is not available
    */
-  getMemoryUsage(): NodeJS.MemoryUsage {
-    return process.memoryUsage();
+  getMemoryUsage(): NodeJS.MemoryUsage | Record<string, never> {
+    if (typeof process !== 'undefined' && typeof process.memoryUsage === 'function') {
+      return process.memoryUsage();
+    }
+    return {};
   },
 
   /**
@@ -432,8 +436,12 @@ export function trackExternalCall<T>(
  * Create request-scoped monitoring
  */
 export function createRequestMonitoring(method: string, path: string) {
-  const requestId = getRequestContext()?.requestId;
-  const tags = { method, path, ...(requestId && { requestId }) };
+  const context = getRequestContext();
+  const requestId = context?.requestId as string | undefined;
+  const tags: Record<string, string> = { method, path };
+  if (requestId) {
+    tags.requestId = requestId;
+  }
 
   monitoring.recordRequest();
 

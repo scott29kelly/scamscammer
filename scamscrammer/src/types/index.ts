@@ -78,13 +78,6 @@ export interface CallUpdatePayload {
   tags?: string[];
 }
 
-// Error response
-export interface ApiErrorResponse {
-  error: string;
-  code?: string;
-  details?: Record<string, string>;
-}
-
 // Storage types (for future use)
 export interface StorageDeleteResult {
   success: boolean;
@@ -111,4 +104,17 @@ export interface HealthResponse {
     storage: ServiceStatus;
   };
   uptime: number;
+}
+
+/**
+ * Dashboard statistics for the admin panel
+ */
+export interface DashboardStats {
+  totalCalls: number;
+  totalDuration: number;
+  averageDuration: number;
+  callsByStatus: Record<string, number>;
+  callsByDay: Array<{ date: string; count: number }>;
+  topRatedCalls: CallListItem[];
+  longestCalls: CallListItem[];
 }

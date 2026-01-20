@@ -13,6 +13,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import {
+  createTwilioClient,
   TwilioClient,
   validateTwilioSignature,
   type TwilioRecordingPayload,
@@ -75,7 +76,7 @@ export async function POST(
     const params = await parseFormData(request);
 
     // Initialize clients
-    const twilioClient = new TwilioClient();
+    const twilioClient = createTwilioClient();
     const storageClient = new StorageClient();
 
     // Validate the request signature in production
@@ -223,7 +224,7 @@ async function handleCompletedRecording(
   }
 
   // Fetch the recording audio from Twilio
-  const recordingBuffer = await twilioClient.getRecording(RecordingUrl);
+  const recordingBuffer = await twilioClient.fetchRecordingAudio(RecordingUrl);
 
   if (!recordingBuffer) {
     console.error('Failed to fetch recording from Twilio:', RecordingSid);

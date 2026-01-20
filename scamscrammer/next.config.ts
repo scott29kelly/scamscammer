@@ -91,12 +91,6 @@ const nextConfig: NextConfig = {
     // ignoreBuildErrors: false,
   },
 
-  // ESLint configuration
-  eslint: {
-    // Allow production builds even with ESLint errors (not recommended for production)
-    // ignoreDuringBuilds: false,
-  },
-
   // Output configuration for Vercel
   output: 'standalone',
 

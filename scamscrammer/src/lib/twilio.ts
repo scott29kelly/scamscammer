@@ -63,6 +63,7 @@ export interface TwilioStartEvent extends TwilioStreamEvent {
 
 export interface TwilioMediaEvent extends TwilioStreamEvent {
   event: 'media';
+  streamSid: string; // Required for media events
   media: {
     track: string;
     chunk: string;
@@ -93,6 +94,29 @@ export type TwilioMediaStreamMessage =
   | TwilioStopEvent
   | TwilioMarkEvent;
 
+// Type aliases for alternative naming conventions
+export type TwilioStreamStartEvent = TwilioStartEvent;
+export type TwilioStreamMediaEvent = TwilioMediaEvent;
+
+/**
+ * Outgoing media message to send audio to Twilio
+ */
+export interface TwilioStreamOutgoingMedia {
+  event: 'media';
+  streamSid: string;
+  media: {
+    payload: string; // base64 encoded audio
+  };
+}
+
+/**
+ * Clear message to flush the audio buffer
+ */
+export interface TwilioStreamClear {
+  event: 'clear';
+  streamSid: string;
+}
+
 class TwilioClient {
   private client: twilio.Twilio;
   private config: TwilioConfig;
@@ -100,6 +124,13 @@ class TwilioClient {
   constructor(config: TwilioConfig) {
     this.config = config;
     this.client = twilio(config.accountSid, config.authToken);
+  }
+
+  /**
+   * Get the auth token for signature validation
+   */
+  getAuthToken(): string {
+    return this.config.authToken;
   }
 
   /**
@@ -222,6 +253,32 @@ class TwilioClient {
   }
 
   /**
+   * Fetch recording audio data from URL
+   */
+  async fetchRecordingAudio(recordingUrl: string): Promise<Buffer | null> {
+    try {
+      // Twilio recording URLs need auth token appended
+      const authUrl = `${recordingUrl}.mp3`;
+      const response = await fetch(authUrl, {
+        headers: {
+          'Authorization': `Basic ${Buffer.from(`${this.config.accountSid}:${this.config.authToken}`).toString('base64')}`,
+        },
+      });
+
+      if (!response.ok) {
+        console.error(`Failed to fetch recording: ${response.status} ${response.statusText}`);
+        return null;
+      }
+
+      const arrayBuffer = await response.arrayBuffer();
+      return Buffer.from(arrayBuffer);
+    } catch (error) {
+      console.error('Error fetching recording audio:', error);
+      return null;
+    }
+  }
+
+  /**
    * Format phone number to E.164 format
    */
   static formatPhoneNumber(phone: string): string {
@@ -317,6 +374,141 @@ export function createTwilioClient(config?: Partial<TwilioConfig>): TwilioClient
     authToken,
     phoneNumber
   });
+}
+
+/**
+ * Twilio call status values
+ */
+export type TwilioCallStatus =
+  | 'queued'
+  | 'initiated'
+  | 'ringing'
+  | 'in-progress'
+  | 'completed'
+  | 'busy'
+  | 'failed'
+  | 'no-answer'
+  | 'canceled';
+
+/**
+ * Validate Twilio webhook signature (standalone function)
+ */
+export function validateTwilioSignature(
+  authToken: string,
+  signature: string,
+  url: string,
+  params: Record<string, string>
+): boolean {
+  return twilio.validateRequest(authToken, signature, url, params);
+}
+
+/**
+ * Get the base URL for webhooks from environment
+ */
+export function getWebhookBaseUrl(): string {
+  return process.env.WEBHOOK_BASE_URL || process.env.NEXTAUTH_URL || 'http://localhost:3000';
+}
+
+/**
+ * Get the Twilio auth token from environment
+ */
+export function getTwilioAuthToken(): string {
+  return process.env.TWILIO_AUTH_TOKEN || '';
+}
+
+/**
+ * Interface for Twilio recording webhook payload
+ */
+export interface TwilioRecordingPayload {
+  AccountSid: string;
+  CallSid: string;
+  RecordingSid: string;
+  RecordingUrl: string;
+  RecordingStatus: 'in-progress' | 'completed' | 'failed' | 'absent';
+  RecordingDuration?: string;
+  RecordingChannels?: string;
+  RecordingSource?: string;
+  RecordingStartTime?: string;
+  ErrorCode?: string;
+}
+
+/**
+ * Interface for Twilio incoming call webhook parameters
+ */
+export interface TwilioIncomingCallParams {
+  CallSid: string;
+  AccountSid: string;
+  From: string;
+  To: string;
+  CallStatus: string;
+  Direction: string;
+  ForwardedFrom?: string;
+  CallerName?: string;
+  FromCity?: string;
+  FromState?: string;
+  FromZip?: string;
+  FromCountry?: string;
+  ToCity?: string;
+  ToState?: string;
+  ToZip?: string;
+  ToCountry?: string;
+}
+
+/**
+ * Validate a Twilio webhook request
+ */
+export function validateRequest(
+  signature: string | null,
+  url: string,
+  params: Record<string, string>
+): boolean {
+  if (!signature) return false;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  if (!authToken) return false;
+  return twilio.validateRequest(authToken, signature, url, params);
+}
+
+/**
+ * Create TwiML for streaming audio via WebSocket
+ */
+export function createStreamingTwiml(websocketUrl: string, greeting?: string): string {
+  const VoiceResponse = twilio.twiml.VoiceResponse;
+  const response = new VoiceResponse();
+
+  if (greeting) {
+    response.say(
+      {
+        voice: 'Polly.Matthew',
+        language: 'en-US'
+      },
+      greeting
+    );
+  }
+
+  const connect = response.connect();
+  connect.stream({
+    url: websocketUrl,
+    track: 'both_tracks'
+  });
+
+  return response.toString();
+}
+
+/**
+ * Create error TwiML response
+ */
+export function createErrorTwiml(message: string = "I'm sorry, something went wrong. Please try calling back later."): string {
+  const VoiceResponse = twilio.twiml.VoiceResponse;
+  const response = new VoiceResponse();
+  response.say(
+    {
+      voice: 'Polly.Matthew',
+      language: 'en-US'
+    },
+    message
+  );
+  response.hangup();
+  return response.toString();
 }
 
 export { TwilioClient };

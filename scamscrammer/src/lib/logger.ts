@@ -198,6 +198,20 @@ export const storageLogger = logger.forService('storage');
 export const databaseLogger = logger.forService('database');
 export const apiLogger = logger.forService('api');
 
+/**
+ * Create a logger for a specific service/module
+ */
+export function createLogger(serviceName: string): Logger {
+  return logger.forService(serviceName);
+}
+
+/**
+ * Get request context for logging (placeholder for request-scoped context)
+ */
+export function getRequestContext(): LogContext {
+  return {};
+}
+
 // Export for creating custom loggers
 export { Logger };
 export default logger;

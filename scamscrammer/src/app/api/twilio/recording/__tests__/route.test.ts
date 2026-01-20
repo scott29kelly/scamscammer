@@ -19,12 +19,16 @@ jest.mock('@/lib/db', () => ({
 }));
 
 // Mock the Twilio client
+const mockTwilioClientInstance = {
+  getAuthToken: jest.fn().mockReturnValue('test-auth-token'),
+  getRecording: jest.fn(),
+  fetchRecordingAudio: jest.fn().mockResolvedValue(Buffer.from('fake-audio-data')),
+};
+
 jest.mock('@/lib/twilio', () => ({
   __esModule: true,
-  TwilioClient: jest.fn().mockImplementation(() => ({
-    getAuthToken: jest.fn().mockReturnValue('test-auth-token'),
-    getRecording: jest.fn(),
-  })),
+  TwilioClient: jest.fn().mockImplementation(() => mockTwilioClientInstance),
+  createTwilioClient: jest.fn().mockImplementation(() => mockTwilioClientInstance),
   validateTwilioSignature: jest.fn().mockReturnValue(true),
 }));
 
@@ -40,10 +44,11 @@ jest.mock('@/lib/storage', () => ({
 const mockPrisma = prisma as jest.Mocked<typeof prisma>;
 
 // Import mocked modules for manipulation
-import { TwilioClient, validateTwilioSignature } from '@/lib/twilio';
+import { TwilioClient, createTwilioClient, validateTwilioSignature } from '@/lib/twilio';
 import { StorageClient } from '@/lib/storage';
 
 const mockTwilioClient = TwilioClient as jest.MockedClass<typeof TwilioClient>;
+const mockCreateTwilioClient = createTwilioClient as jest.MockedFunction<typeof createTwilioClient>;
 const mockStorageClient = StorageClient as jest.MockedClass<typeof StorageClient>;
 const mockValidateSignature = validateTwilioSignature as jest.MockedFunction<
   typeof validateTwilioSignature
@@ -87,14 +92,9 @@ describe('POST /api/twilio/recording', () => {
   beforeEach(() => {
     jest.clearAllMocks();
 
-    // Default mock implementations
-    mockTwilioClient.mockImplementation(
-      () =>
-        ({
-          getAuthToken: jest.fn().mockReturnValue('test-auth-token'),
-          getRecording: jest.fn().mockResolvedValue(Buffer.from('fake-audio-data')),
-        }) as unknown as InstanceType<typeof TwilioClient>
-    );
+    // Reset the default mock implementations
+    mockTwilioClientInstance.getAuthToken.mockReturnValue('test-auth-token');
+    mockTwilioClientInstance.fetchRecordingAudio.mockResolvedValue(Buffer.from('fake-audio-data'));
 
     mockStorageClient.mockImplementation(
       () =>
@@ -164,13 +164,7 @@ describe('POST /api/twilio/recording', () => {
     it('should handle Twilio recording fetch failure', async () => {
       (mockPrisma.call.findFirst as jest.Mock).mockResolvedValue(mockCall);
 
-      mockTwilioClient.mockImplementation(
-        () =>
-          ({
-            getAuthToken: jest.fn().mockReturnValue('test-auth-token'),
-            getRecording: jest.fn().mockResolvedValue(null),
-          }) as unknown as InstanceType<typeof TwilioClient>
-      );
+      mockTwilioClientInstance.fetchRecordingAudio.mockResolvedValue(null);
 
       const request = createMockRequest(completedParams);
       const response = await POST(request);

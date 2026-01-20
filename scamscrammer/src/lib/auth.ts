@@ -2,6 +2,7 @@ import NextAuth from 'next-auth';
 import Credentials from 'next-auth/providers/credentials';
 import bcrypt from 'bcryptjs';
 import { prisma } from './db';
+import { cookies } from 'next/headers';
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
   providers: [
@@ -65,3 +66,37 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     strategy: 'jwt',
   },
 });
+
+/**
+ * Validate password against environment variable
+ * Used for simple admin authentication
+ */
+export async function validatePassword(password: string): Promise<boolean> {
+  const adminPassword = process.env.ADMIN_PASSWORD;
+  if (!adminPassword) {
+    return false;
+  }
+  return password === adminPassword;
+}
+
+/**
+ * Create a simple session cookie
+ */
+export async function createSession(): Promise<void> {
+  const cookieStore = await cookies();
+  cookieStore.set('session', 'authenticated', {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    maxAge: 60 * 60 * 24, // 24 hours
+    path: '/',
+  });
+}
+
+/**
+ * Destroy the session cookie
+ */
+export async function destroySession(): Promise<void> {
+  const cookieStore = await cookies();
+  cookieStore.delete('session');
+}

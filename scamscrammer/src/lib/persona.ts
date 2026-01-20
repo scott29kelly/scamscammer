@@ -241,6 +241,11 @@ export const EARL_PERSONA: PersonaConfig = {
 };
 
 /**
+ * Default greeting for Earl when answering calls
+ */
+export const EARL_GREETING = "Hello? Hello? Who's there? Hold on, let me turn up my hearing aid... Okay, okay. Hello! This is Earl Pemberton speaking. How can I help you today?";
+
+/**
  * Get a random tangent topic for Earl to ramble about
  * @returns A randomly selected tangent topic
  */

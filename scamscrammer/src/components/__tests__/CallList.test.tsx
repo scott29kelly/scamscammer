@@ -2,10 +2,14 @@
  * CallList Component Tests
  */
 
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import CallList from '../CallList';
-import type { CallListItem, PaginationInfo } from '@/types';
+import type { CallListItem, PaginationInfo, CallListResponse } from '@/types';
 import { CallStatus } from '@prisma/client';
+
+// Mock fetch globally
+const mockFetch = jest.fn();
+global.fetch = mockFetch;
 
 // Mock next/navigation
 jest.mock('next/navigation', () => ({
@@ -61,313 +65,531 @@ const mockPagination: PaginationInfo = {
   hasPrev: false,
 };
 
+const createMockResponse = (
+  calls: CallListItem[] = mockCalls,
+  pagination: PaginationInfo = mockPagination
+): CallListResponse => ({
+  calls,
+  pagination,
+});
+
 describe('CallList Component', () => {
-  const mockOnPageChange = jest.fn();
   const mockOnCallClick = jest.fn();
-  const mockOnStatusFilter = jest.fn();
-  const mockOnSortChange = jest.fn();
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockFetch.mockReset();
   });
 
-  it('renders calls in a table', () => {
-    render(
-      <CallList
-        calls={mockCalls}
-        pagination={mockPagination}
-        onPageChange={mockOnPageChange}
-      />
-    );
+  describe('with initial data', () => {
+    // The component fetches on mount due to useEffect, so we need to mock fetch
+    // for all tests with initialCalls to prevent errors
+    beforeEach(() => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => createMockResponse(),
+      });
+    });
 
-    // Check table headers (using regex to handle sort indicators)
-    expect(screen.getByText(/^Date/)).toBeInTheDocument();
-    expect(screen.getByText('From')).toBeInTheDocument();
-    expect(screen.getByText('Status')).toBeInTheDocument();
-    expect(screen.getByText(/^Duration/)).toBeInTheDocument();
-    expect(screen.getByText(/^Rating/)).toBeInTheDocument();
-    expect(screen.getByText('Segments')).toBeInTheDocument();
+    it('renders calls in a table', async () => {
+      await act(async () => {
+        render(
+          <CallList
+            initialCalls={mockCalls}
+            initialPagination={mockPagination}
+            onCallClick={mockOnCallClick}
+          />
+        );
+      });
 
-    // Check call data
-    expect(screen.getByText('COMPLETED')).toBeInTheDocument();
-    expect(screen.getByText('IN PROGRESS')).toBeInTheDocument();
-    expect(screen.getByText('5:00')).toBeInTheDocument(); // 300 seconds = 5:00
-    expect(screen.getByText('10')).toBeInTheDocument(); // segments count
-    expect(screen.getByText('5')).toBeInTheDocument(); // segments count for second call
+      // Check table headers - these appear immediately even during loading
+      expect(screen.getByText(/^Date/)).toBeInTheDocument();
+      expect(screen.getByText('From')).toBeInTheDocument();
+
+      // Wait for data to appear after fetch completes
+      await waitFor(() => {
+        // Check call data - duration 5:00 confirms data loaded
+        expect(screen.getByText('5:00')).toBeInTheDocument();
+      }, { timeout: 5000 });
+
+      // Now check other elements that should be visible
+      // Status appears in both header/filter and in table as badge
+      expect(screen.getAllByText('Status').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByText(/^Duration/)).toBeInTheDocument();
+      expect(screen.getByText(/^Rating/)).toBeInTheDocument();
+      expect(screen.getByText('Segments')).toBeInTheDocument();
+
+      // Check call data - status shown in title case
+      // "Completed" appears both as status badge and filter option
+      expect(screen.getAllByText('Completed').length).toBeGreaterThanOrEqual(1);
+      // "In Progress" appears both as status badge and filter option
+      expect(screen.getAllByText('In Progress').length).toBeGreaterThanOrEqual(1);
+      // Segments count
+      expect(screen.getByText('10')).toBeInTheDocument();
+      expect(screen.getByText('5')).toBeInTheDocument();
+    });
+
+    it('formats phone numbers correctly', async () => {
+      await act(async () => {
+        render(
+          <CallList
+            initialCalls={mockCalls}
+            initialPagination={mockPagination}
+          />
+        );
+      });
+
+      // +15551234567 should be formatted as +1 (555) 123-4567
+      await waitFor(() => {
+        expect(screen.getByText('+1 (555) 123-4567')).toBeInTheDocument();
+        expect(screen.getByText('+1 (555) 123-4568')).toBeInTheDocument();
+      });
+    });
+
+    it('formats duration correctly', async () => {
+      await act(async () => {
+        render(
+          <CallList
+            initialCalls={mockCalls}
+            initialPagination={mockPagination}
+          />
+        );
+      });
+
+      await waitFor(() => {
+        // 300 seconds = 5:00
+        expect(screen.getByText('5:00')).toBeInTheDocument();
+        // null duration should show "-"
+        const dashElements = screen.getAllByText('-');
+        expect(dashElements.length).toBeGreaterThanOrEqual(1);
+      });
+    });
+
+    it('displays rating stars correctly', async () => {
+      await act(async () => {
+        render(
+          <CallList
+            initialCalls={mockCalls}
+            initialPagination={mockPagination}
+          />
+        );
+      });
+
+      await waitFor(() => {
+        // Should render star containers
+        const starContainers = document.querySelectorAll('.flex.gap-0\\.5');
+        expect(starContainers.length).toBeGreaterThan(0);
+      });
+    });
+
+    it('handles row click', async () => {
+      await act(async () => {
+        render(
+          <CallList
+            initialCalls={mockCalls}
+            initialPagination={mockPagination}
+            onCallClick={mockOnCallClick}
+          />
+        );
+      });
+
+      await waitFor(() => {
+        const rows = screen.getAllByRole('row');
+        expect(rows.length).toBeGreaterThan(1);
+      });
+
+      // Click on a row
+      const rows = screen.getAllByRole('row');
+      // First row is header, second row is first data row
+      fireEvent.click(rows[1]);
+      expect(mockOnCallClick).toHaveBeenCalledWith(mockCalls[0]);
+    });
+
+    it('shows pagination controls', async () => {
+      await act(async () => {
+        render(
+          <CallList
+            initialCalls={mockCalls}
+            initialPagination={mockPagination}
+          />
+        );
+      });
+
+      await waitFor(() => {
+        // Check pagination info
+        expect(screen.getByText(/Showing/)).toBeInTheDocument();
+        expect(screen.getByText('Previous')).toBeInTheDocument();
+        expect(screen.getByText('Next')).toBeInTheDocument();
+        expect(screen.getByText(/Page 1 of 3/)).toBeInTheDocument();
+      });
+    });
+
+    it('disables previous button on first page', async () => {
+      await act(async () => {
+        render(
+          <CallList
+            initialCalls={mockCalls}
+            initialPagination={mockPagination}
+          />
+        );
+      });
+
+      await waitFor(() => {
+        const prevButton = screen.getByText('Previous');
+        expect(prevButton).toBeDisabled();
+      });
+    });
+
+    it('enables next button when hasNext is true', async () => {
+      await act(async () => {
+        render(
+          <CallList
+            initialCalls={mockCalls}
+            initialPagination={mockPagination}
+          />
+        );
+      });
+
+      await waitFor(() => {
+        const nextButton = screen.getByText('Next');
+        expect(nextButton).not.toBeDisabled();
+      });
+    });
+
+    it('renders filter controls', async () => {
+      await act(async () => {
+        render(
+          <CallList
+            initialCalls={mockCalls}
+            initialPagination={mockPagination}
+          />
+        );
+      });
+
+      // Check filter labels - these are always visible
+      expect(screen.getByText('Search')).toBeInTheDocument();
+      expect(screen.getByText('Min Rating')).toBeInTheDocument();
+      expect(screen.getByText('Apply')).toBeInTheDocument();
+    });
+
+    it('has status filter dropdown with all statuses', async () => {
+      await act(async () => {
+        render(
+          <CallList
+            initialCalls={mockCalls}
+            initialPagination={mockPagination}
+          />
+        );
+      });
+
+      // Check options exist - these are always visible
+      expect(screen.getByRole('option', { name: 'All Statuses' })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: 'Ringing' })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: 'Failed' })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: 'No Answer' })).toBeInTheDocument();
+    });
   });
 
-  it('shows empty state when no calls', () => {
-    render(
-      <CallList
-        calls={[]}
-        pagination={{ ...mockPagination, total: 0, totalPages: 0 }}
-        onPageChange={mockOnPageChange}
-      />
-    );
+  describe('empty state', () => {
+    it('shows empty state when no calls with no filters', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => createMockResponse([], { ...mockPagination, total: 0, totalPages: 0 }),
+      });
 
-    expect(screen.getByText('No calls found')).toBeInTheDocument();
-    expect(screen.getByText('No calls have been recorded yet')).toBeInTheDocument();
+      await act(async () => {
+        render(<CallList />);
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText('No calls found')).toBeInTheDocument();
+      });
+
+      expect(screen.getByText('Calls will appear here once they are received')).toBeInTheDocument();
+    });
   });
 
-  it('shows loading state', () => {
-    render(
-      <CallList
-        calls={[]}
-        pagination={mockPagination}
-        onPageChange={mockOnPageChange}
-        isLoading={true}
-      />
-    );
+  describe('loading state', () => {
+    it('shows loading spinner when fetching data', async () => {
+      // Mock a pending fetch that never resolves
+      mockFetch.mockImplementationOnce(() => new Promise(() => {}));
 
-    // Check for skeleton loading divs
-    const loadingElements = document.querySelectorAll('.animate-pulse');
-    expect(loadingElements.length).toBeGreaterThan(0);
+      render(<CallList />);
+
+      // Check for loading spinner - should appear immediately since no initial data
+      const spinner = document.querySelector('.animate-spin');
+      expect(spinner).toBeInTheDocument();
+    });
   });
 
-  it('handles pagination correctly', () => {
-    render(
-      <CallList
-        calls={mockCalls}
-        pagination={mockPagination}
-        onPageChange={mockOnPageChange}
-      />
-    );
+  describe('error state', () => {
+    it('shows error message when fetch fails', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+      });
 
-    // Check pagination info exists (text is split across elements, so check container text)
-    const paginationContainer = screen.getByText(/Showing/);
-    expect(paginationContainer.closest('div')).toHaveTextContent(/Showing.*1.*to.*20.*of.*50.*calls/);
+      await act(async () => {
+        render(<CallList />);
+      });
 
-    // Previous should be disabled
-    const prevButton = screen.getByText('Previous');
-    expect(prevButton).toBeDisabled();
-
-    // Next should be enabled
-    const nextButton = screen.getByText('Next');
-    expect(nextButton).not.toBeDisabled();
-
-    // Click next
-    fireEvent.click(nextButton);
-    expect(mockOnPageChange).toHaveBeenCalledWith(2);
+      await waitFor(() => {
+        expect(screen.getByText('Failed to fetch calls')).toBeInTheDocument();
+      });
+    });
   });
 
-  it('handles row click', () => {
-    render(
-      <CallList
-        calls={mockCalls}
-        pagination={mockPagination}
-        onPageChange={mockOnPageChange}
-        onCallClick={mockOnCallClick}
-      />
-    );
+  describe('filters and actions', () => {
+    it('triggers fetch when Apply button is clicked', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => createMockResponse(),
+      });
 
-    // Click on a row
-    const rows = screen.getAllByRole('row');
-    // First row is header, second row is first data row
-    fireEvent.click(rows[1]);
-    expect(mockOnCallClick).toHaveBeenCalledWith('call-1');
+      await act(async () => {
+        render(
+          <CallList
+            initialCalls={mockCalls}
+            initialPagination={mockPagination}
+          />
+        );
+      });
+
+      // Wait for initial load to complete
+      await waitFor(() => {
+        expect(screen.getByText('Apply')).toBeInTheDocument();
+      });
+
+      mockFetch.mockClear();
+
+      // Click Apply button
+      await act(async () => {
+        fireEvent.click(screen.getByText('Apply'));
+      });
+
+      await waitFor(() => {
+        expect(mockFetch).toHaveBeenCalled();
+      });
+    });
+
+    it('includes filter params in fetch request', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => createMockResponse(),
+      });
+
+      await act(async () => {
+        render(
+          <CallList
+            initialCalls={mockCalls}
+            initialPagination={mockPagination}
+          />
+        );
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText('Apply')).toBeInTheDocument();
+      });
+
+      // Find status select by looking for the select element with "All Statuses" option
+      const statusSelect = screen.getAllByRole('combobox')[0];
+
+      mockFetch.mockClear();
+
+      await act(async () => {
+        fireEvent.change(statusSelect, { target: { value: 'COMPLETED' } });
+        fireEvent.click(screen.getByText('Apply'));
+      });
+
+      await waitFor(() => {
+        expect(mockFetch).toHaveBeenCalledWith(
+          expect.stringContaining('status=COMPLETED')
+        );
+      });
+    });
   });
 
-  it('shows status filter buttons when onStatusFilter is provided', () => {
-    render(
-      <CallList
-        calls={mockCalls}
-        pagination={mockPagination}
-        onPageChange={mockOnPageChange}
-        onStatusFilter={mockOnStatusFilter}
-      />
-    );
+  describe('sorting', () => {
+    it('sorts by duration when clicking Duration column header', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => createMockResponse(),
+      });
 
-    // Check all status filters are shown (use getAllByText for those that appear in both filter and table)
-    expect(screen.getByText('All')).toBeInTheDocument();
-    expect(screen.getByText('RINGING')).toBeInTheDocument();
-    expect(screen.getAllByText('IN PROGRESS').length).toBeGreaterThanOrEqual(1); // filter + possible badge
-    expect(screen.getAllByText('COMPLETED').length).toBeGreaterThanOrEqual(1); // filter + possible badge
-    expect(screen.getByText('FAILED')).toBeInTheDocument();
-    expect(screen.getByText('NO ANSWER')).toBeInTheDocument();
+      await act(async () => {
+        render(
+          <CallList
+            initialCalls={mockCalls}
+            initialPagination={mockPagination}
+          />
+        );
+      });
+
+      // Wait for data to be visible
+      await waitFor(() => {
+        expect(screen.getByText(/^Duration/)).toBeInTheDocument();
+      });
+
+      mockFetch.mockClear();
+
+      // Click on Duration header to change sort field
+      await act(async () => {
+        fireEvent.click(screen.getByText(/^Duration/));
+      });
+
+      await waitFor(() => {
+        expect(mockFetch).toHaveBeenCalledWith(
+          expect.stringContaining('sortBy=duration')
+        );
+      });
+    });
+
+    it('changes sort when clicking column header', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => createMockResponse(),
+      });
+
+      await act(async () => {
+        render(
+          <CallList
+            initialCalls={mockCalls}
+            initialPagination={mockPagination}
+          />
+        );
+      });
+
+      // Wait for data to be visible
+      await waitFor(() => {
+        expect(screen.getByText(/^Rating/)).toBeInTheDocument();
+      });
+
+      mockFetch.mockClear();
+
+      // Click Rating header to change sort field
+      const ratingHeader = screen.getByText(/^Rating/);
+
+      await act(async () => {
+        fireEvent.click(ratingHeader);
+      });
+
+      // Should trigger fetch with new sort field
+      await waitFor(() => {
+        expect(mockFetch).toHaveBeenCalledWith(
+          expect.stringContaining('sortBy=rating')
+        );
+      });
+    });
   });
 
-  it('handles status filter click', () => {
-    render(
-      <CallList
-        calls={mockCalls}
-        pagination={mockPagination}
-        onPageChange={mockOnPageChange}
-        onStatusFilter={mockOnStatusFilter}
-      />
-    );
+  describe('pagination', () => {
+    it('fetches next page when Next button is clicked', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => createMockResponse(mockCalls, mockPagination),
+      });
 
-    // Click on COMPLETED filter
-    const completedButton = screen.getAllByText('COMPLETED')[0]; // Get the filter button, not status badge
-    fireEvent.click(completedButton);
-    expect(mockOnStatusFilter).toHaveBeenCalledWith(CallStatus.COMPLETED);
+      await act(async () => {
+        render(
+          <CallList
+            initialCalls={mockCalls}
+            initialPagination={mockPagination}
+          />
+        );
+      });
+
+      // Wait for Next button to appear
+      await waitFor(() => {
+        expect(screen.getByText('Next')).toBeInTheDocument();
+      });
+
+      mockFetch.mockClear();
+
+      await act(async () => {
+        fireEvent.click(screen.getByText('Next'));
+      });
+
+      await waitFor(() => {
+        expect(mockFetch).toHaveBeenCalledWith(
+          expect.stringContaining('page=2')
+        );
+      });
+    });
+
+    it('fetches previous page when Previous button is clicked', async () => {
+      const page2Pagination = { ...mockPagination, page: 2, hasPrev: true };
+
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => createMockResponse(mockCalls, page2Pagination),
+      });
+
+      await act(async () => {
+        render(
+          <CallList
+            initialCalls={mockCalls}
+            initialPagination={page2Pagination}
+          />
+        );
+      });
+
+      // Wait for pagination to render
+      await waitFor(() => {
+        expect(screen.getByText('Previous')).toBeInTheDocument();
+      });
+
+      const prevButton = screen.getByText('Previous');
+      expect(prevButton).not.toBeDisabled();
+
+      mockFetch.mockClear();
+
+      await act(async () => {
+        fireEvent.click(prevButton);
+      });
+
+      await waitFor(() => {
+        expect(mockFetch).toHaveBeenCalledWith(
+          expect.stringContaining('page=1')
+        );
+      });
+    });
   });
 
-  it('shows empty state with filter message when filtering', () => {
-    render(
-      <CallList
-        calls={[]}
-        pagination={{ ...mockPagination, total: 0, totalPages: 0 }}
-        onPageChange={mockOnPageChange}
-        currentStatus={CallStatus.FAILED}
-      />
-    );
+  describe('search', () => {
+    it('triggers fetch when Enter is pressed in search field', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => createMockResponse(),
+      });
 
-    expect(screen.getByText('No calls found')).toBeInTheDocument();
-    expect(screen.getByText('No calls with status "FAILED"')).toBeInTheDocument();
-  });
+      await act(async () => {
+        render(
+          <CallList
+            initialCalls={mockCalls}
+            initialPagination={mockPagination}
+          />
+        );
+      });
 
-  it('formats duration correctly', () => {
-    render(
-      <CallList
-        calls={mockCalls}
-        pagination={mockPagination}
-        onPageChange={mockOnPageChange}
-      />
-    );
+      // Wait for search input to appear
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText('Phone number or notes...')).toBeInTheDocument();
+      });
 
-    // 300 seconds = 5:00
-    expect(screen.getByText('5:00')).toBeInTheDocument();
-    // null duration should show "-" (multiple "-" may exist for null duration and rating)
-    const dashElements = screen.getAllByText('-');
-    expect(dashElements.length).toBeGreaterThanOrEqual(1);
-  });
+      const searchInput = screen.getByPlaceholderText('Phone number or notes...');
 
-  it('displays rating stars correctly', () => {
-    render(
-      <CallList
-        calls={mockCalls}
-        pagination={mockPagination}
-        onPageChange={mockOnPageChange}
-      />
-    );
+      mockFetch.mockClear();
 
-    // First call has rating 5 - should show 5 yellow stars
-    const starContainers = document.querySelectorAll('.flex.gap-0\\.5');
-    expect(starContainers.length).toBeGreaterThan(0);
-  });
+      await act(async () => {
+        fireEvent.change(searchInput, { target: { value: '555' } });
+        fireEvent.keyDown(searchInput, { key: 'Enter', code: 'Enter' });
+      });
 
-  it('shows sort controls when onSortChange is provided', () => {
-    render(
-      <CallList
-        calls={mockCalls}
-        pagination={mockPagination}
-        onPageChange={mockOnPageChange}
-        onSortChange={mockOnSortChange}
-      />
-    );
-
-    expect(screen.getByText(/Sort by:/)).toBeInTheDocument();
-  });
-
-  it('handles sort dropdown interaction', () => {
-    render(
-      <CallList
-        calls={mockCalls}
-        pagination={mockPagination}
-        onPageChange={mockOnPageChange}
-        onSortChange={mockOnSortChange}
-        currentSortBy="createdAt"
-        currentSortOrder="desc"
-      />
-    );
-
-    // Click sort button to open dropdown
-    const sortButton = screen.getByText(/Sort by:/);
-    fireEvent.click(sortButton);
-
-    // Should show sort options in dropdown (use getAllByText and find dropdown options)
-    const durationOptions = screen.getAllByText('Duration');
-    expect(durationOptions.length).toBeGreaterThanOrEqual(2); // header + dropdown
-
-    // Find and click the dropdown option (the one in a button inside the dropdown)
-    const dropdownButtons = document.querySelectorAll('.absolute button');
-    const durationButton = Array.from(dropdownButtons).find(btn => btn.textContent?.includes('Duration'));
-    expect(durationButton).toBeTruthy();
-    fireEvent.click(durationButton!);
-    expect(mockOnSortChange).toHaveBeenCalledWith('duration', 'desc');
-  });
-
-  it('handles column header click for sorting', () => {
-    render(
-      <CallList
-        calls={mockCalls}
-        pagination={mockPagination}
-        onPageChange={mockOnPageChange}
-        onSortChange={mockOnSortChange}
-        currentSortBy="createdAt"
-        currentSortOrder="desc"
-      />
-    );
-
-    // Click on Duration header (find the th element)
-    const durationHeader = screen.getByRole('columnheader', { name: /Duration/ });
-    fireEvent.click(durationHeader);
-    expect(mockOnSortChange).toHaveBeenCalledWith('duration', 'desc');
-  });
-
-  it('toggles sort order when clicking same column', () => {
-    render(
-      <CallList
-        calls={mockCalls}
-        pagination={mockPagination}
-        onPageChange={mockOnPageChange}
-        onSortChange={mockOnSortChange}
-        currentSortBy="duration"
-        currentSortOrder="desc"
-      />
-    );
-
-    // Open dropdown and click on Duration (already selected)
-    const sortButton = screen.getByText(/Sort by:/);
-    fireEvent.click(sortButton);
-
-    // Find and click the dropdown option
-    const dropdownButtons = document.querySelectorAll('.absolute button');
-    const durationButton = Array.from(dropdownButtons).find(btn => btn.textContent?.includes('Duration'));
-    fireEvent.click(durationButton!);
-    expect(mockOnSortChange).toHaveBeenCalledWith('duration', 'asc');
-  });
-
-  it('formats phone numbers correctly', () => {
-    render(
-      <CallList
-        calls={mockCalls}
-        pagination={mockPagination}
-        onPageChange={mockOnPageChange}
-      />
-    );
-
-    // +15551234567 should be formatted as (555) 123-4567
-    expect(screen.getByText('(555) 123-4567')).toBeInTheDocument();
-    expect(screen.getByText('(555) 123-4568')).toBeInTheDocument();
-  });
-
-  it('shows correct page numbers in pagination', () => {
-    render(
-      <CallList
-        calls={mockCalls}
-        pagination={{ ...mockPagination, page: 2, hasPrev: true }}
-        onPageChange={mockOnPageChange}
-      />
-    );
-
-    // Should show page 1, 2, 3
-    expect(screen.getByRole('button', { name: '1' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '2' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '3' })).toBeInTheDocument();
-  });
-
-  it('handles page number click', () => {
-    render(
-      <CallList
-        calls={mockCalls}
-        pagination={mockPagination}
-        onPageChange={mockOnPageChange}
-      />
-    );
-
-    // Click page 2
-    fireEvent.click(screen.getByRole('button', { name: '2' }));
-    expect(mockOnPageChange).toHaveBeenCalledWith(2);
+      await waitFor(() => {
+        expect(mockFetch).toHaveBeenCalledWith(
+          expect.stringContaining('search=555')
+        );
+      });
+    });
   });
 });
