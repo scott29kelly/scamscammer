@@ -102,3 +102,44 @@ export interface DashboardStats {
   topRatedCalls: CallListItem[];
   longestCalls: CallListItem[];
 }
+
+/**
+ * Twilio call status values received in webhooks
+ * @see https://www.twilio.com/docs/voice/twiml#callstatus-values
+ */
+export type TwilioCallStatus =
+  | 'queued'
+  | 'initiated'
+  | 'ringing'
+  | 'in-progress'
+  | 'completed'
+  | 'busy'
+  | 'no-answer'
+  | 'canceled'
+  | 'failed';
+
+/**
+ * Twilio status webhook callback payload
+ */
+export interface TwilioStatusPayload {
+  CallSid: string;
+  AccountSid: string;
+  From: string;
+  To: string;
+  CallStatus: TwilioCallStatus;
+  CallDuration?: string;
+  Direction: string;
+  ApiVersion: string;
+  Timestamp?: string;
+}
+
+/**
+ * Response from the status webhook handler
+ */
+export interface StatusUpdateResponse {
+  success: boolean;
+  callId: string;
+  previousStatus: string;
+  newStatus: string;
+  duration?: number;
+}
