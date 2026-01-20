@@ -169,6 +169,147 @@ export type TwilioRecordingStatus =
   | 'failed';
 
 // =============================================================================
+// Twilio Media Stream Types (WebSocket)
+// =============================================================================
+
+/**
+ * Event types for Twilio Media Stream WebSocket
+ */
+export type TwilioStreamEventType =
+  | 'connected'
+  | 'start'
+  | 'media'
+  | 'stop'
+  | 'mark';
+
+/**
+ * Base interface for all Twilio Media Stream events
+ */
+export interface TwilioStreamEventBase {
+  event: TwilioStreamEventType;
+  sequenceNumber?: string;
+  streamSid?: string;
+}
+
+/**
+ * Connected event - sent when WebSocket connection is established
+ */
+export interface TwilioStreamConnectedEvent extends TwilioStreamEventBase {
+  event: 'connected';
+  protocol: string;
+  version: string;
+}
+
+/**
+ * Start event - sent when media stream begins
+ */
+export interface TwilioStreamStartEvent extends TwilioStreamEventBase {
+  event: 'start';
+  sequenceNumber: string;
+  start: {
+    streamSid: string;
+    accountSid: string;
+    callSid: string;
+    tracks: string[];
+    customParameters: Record<string, string>;
+    mediaFormat: {
+      encoding: 'audio/x-mulaw';
+      sampleRate: number;
+      channels: number;
+    };
+  };
+  streamSid: string;
+}
+
+/**
+ * Media event - contains audio data
+ */
+export interface TwilioStreamMediaEvent extends TwilioStreamEventBase {
+  event: 'media';
+  sequenceNumber: string;
+  media: {
+    track: 'inbound' | 'outbound';
+    chunk: string;
+    timestamp: string;
+    payload: string;
+  };
+  streamSid: string;
+}
+
+/**
+ * Stop event - sent when media stream ends
+ */
+export interface TwilioStreamStopEvent extends TwilioStreamEventBase {
+  event: 'stop';
+  sequenceNumber: string;
+  stop: {
+    accountSid: string;
+    callSid: string;
+  };
+  streamSid: string;
+}
+
+/**
+ * Mark event - sent when a mark is reached in the stream
+ */
+export interface TwilioStreamMarkEvent extends TwilioStreamEventBase {
+  event: 'mark';
+  sequenceNumber: string;
+  mark: {
+    name: string;
+  };
+  streamSid: string;
+}
+
+/**
+ * Union type for all Twilio Media Stream events
+ */
+export type TwilioStreamEvent =
+  | TwilioStreamConnectedEvent
+  | TwilioStreamStartEvent
+  | TwilioStreamMediaEvent
+  | TwilioStreamStopEvent
+  | TwilioStreamMarkEvent;
+
+/**
+ * Message to send audio back to Twilio via WebSocket
+ */
+export interface TwilioStreamOutgoingMedia {
+  event: 'media';
+  streamSid: string;
+  media: {
+    payload: string;
+  };
+}
+
+/**
+ * Message to send a mark to Twilio (for tracking audio playback)
+ */
+export interface TwilioStreamOutgoingMark {
+  event: 'mark';
+  streamSid: string;
+  mark: {
+    name: string;
+  };
+}
+
+/**
+ * Message to clear the Twilio audio buffer
+ */
+export interface TwilioStreamClear {
+  event: 'clear';
+  streamSid: string;
+}
+
+/**
+ * Union type for all outgoing Twilio stream messages
+ */
+export type TwilioStreamOutgoingMessage =
+  | TwilioStreamOutgoingMedia
+  | TwilioStreamOutgoingMark
+  | TwilioStreamClear;
+
+// =============================================================================
 // Twilio Client Types
 // =============================================================================
 

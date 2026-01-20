@@ -1,447 +1,604 @@
 /**
  * WebSocket Voice Stream Handler
  *
- * This route handles the bidirectional audio stream between Twilio and OpenAI's
- * Realtime API. It serves as the bridge that enables Earl (our AI persona) to
- * have real-time voice conversations with scam callers.
+ * This endpoint handles bidirectional audio streaming between Twilio and OpenAI.
+ * It receives audio from incoming scam calls via Twilio's Media Streams,
+ * forwards it to OpenAI's Realtime API for the Earl AI persona to process,
+ * and sends Earl's audio responses back to Twilio.
  *
  * Flow:
- * 1. Twilio connects via WebSocket when a call is answered
- * 2. Audio from the caller is forwarded to OpenAI Realtime API
- * 3. Earl's responses from OpenAI are sent back to Twilio
- * 4. Conversation segments are stored in the database for review
+ * 1. Twilio connects via WebSocket when a call starts
+ * 2. Twilio sends 'start' event with call metadata
+ * 3. We connect to OpenAI Realtime API
+ * 4. Twilio sends 'media' events with audio chunks
+ * 5. We forward audio to OpenAI
+ * 6. OpenAI sends audio responses
+ * 7. We forward Earl's audio back to Twilio
+ * 8. Conversation segments are saved to the database
+ *
+ * @see https://www.twilio.com/docs/voice/media-streams
  */
 
-import { NextRequest, NextResponse } from 'next/server';
-import prisma from '../../../../lib/db';
-import { OpenAIRealtimeClient, createOpenAIClient } from '../../../../lib/openai';
-import {
-  TwilioClient,
-  TwilioMediaStreamMessage,
-  TwilioStartEvent,
-  TwilioMediaEvent
-} from '../../../../lib/twilio';
+import { WebSocketServer, WebSocket } from 'ws';
+import { IncomingMessage } from 'http';
+import { createEarlClient, OpenAIRealtimeClient } from '@/lib/openai';
+import { prisma } from '@/lib/db';
+import { Speaker } from '@/types';
+import type {
+  TwilioStreamEvent,
+  TwilioStreamStartEvent,
+  TwilioStreamMediaEvent,
+  TwilioStreamOutgoingMedia,
+  TwilioStreamClear,
+} from '@/types';
 
-// Speaker enum - matches Prisma schema
-const Speaker = {
-  EARL: 'EARL',
-  SCAMMER: 'SCAMMER'
-} as const;
-
-// Connection state for each active stream
-interface StreamConnection {
-  callSid: string;
-  streamSid: string;
-  openai: OpenAIRealtimeClient;
-  callId: string | null;
-  startTime: number;
-  lastTranscriptTime: number;
-}
-
-// Store for active connections (in production, use Redis or similar)
-const activeConnections = new Map<string, StreamConnection>();
+// =============================================================================
+// Types
+// =============================================================================
 
 /**
- * Handle WebSocket upgrade for voice streaming
- *
- * Note: Next.js doesn't natively support WebSocket upgrades in route handlers.
- * This implementation provides the logic that would be used with a custom server
- * or WebSocket-compatible hosting (like Vercel with Edge Runtime or a custom server).
+ * Session state for an active call
  */
-export async function GET(request: NextRequest) {
-  // Check for WebSocket upgrade header
+interface CallSession {
+  callSid: string;
+  streamSid: string;
+  callId: string | null;
+  openaiClient: OpenAIRealtimeClient;
+  startTime: number;
+  lastActivityTime: number;
+  isConnected: boolean;
+}
+
+/**
+ * Pending transcript accumulator
+ */
+interface PendingTranscript {
+  speaker: Speaker;
+  text: string;
+  startTime: number;
+}
+
+// =============================================================================
+// Module State
+// =============================================================================
+
+// Track active sessions by streamSid
+const activeSessions = new Map<string, CallSession>();
+
+// Track pending transcripts for saving to database
+const pendingTranscripts = new Map<string, PendingTranscript>();
+
+// WebSocket server singleton (reused across requests)
+let wss: WebSocketServer | null = null;
+
+// =============================================================================
+// WebSocket Server Setup
+// =============================================================================
+
+/**
+ * Get or create the WebSocket server singleton
+ */
+function getWebSocketServer(): WebSocketServer {
+  if (!wss) {
+    wss = new WebSocketServer({ noServer: true });
+    console.log('[Voice Stream] WebSocket server created');
+  }
+  return wss;
+}
+
+// =============================================================================
+// Session Management
+// =============================================================================
+
+/**
+ * Create a new call session
+ */
+async function createSession(
+  startEvent: TwilioStreamStartEvent,
+  twilioWs: WebSocket
+): Promise<CallSession> {
+  const { callSid, streamSid } = startEvent.start;
+
+  console.log('[Voice Stream] Creating session for call:', callSid);
+
+  // Find the call record in our database
+  let callId: string | null = null;
+  try {
+    const call = await prisma.call.findUnique({
+      where: { twilioSid: callSid },
+      select: { id: true },
+    });
+    callId = call?.id ?? null;
+
+    if (!callId) {
+      console.warn('[Voice Stream] Call not found in database:', callSid);
+    }
+  } catch (error) {
+    console.error('[Voice Stream] Error finding call:', error);
+  }
+
+  // Create OpenAI Realtime client configured for Earl
+  const openaiClient = createEarlClient();
+
+  // Set up event handlers for OpenAI responses
+  setupOpenAIHandlers(openaiClient, twilioWs, streamSid, callId);
+
+  // Connect to OpenAI
+  try {
+    await openaiClient.connect();
+    console.log('[Voice Stream] Connected to OpenAI Realtime API');
+  } catch (error) {
+    console.error('[Voice Stream] Failed to connect to OpenAI:', error);
+    throw error;
+  }
+
+  const session: CallSession = {
+    callSid,
+    streamSid,
+    callId,
+    openaiClient,
+    startTime: Date.now(),
+    lastActivityTime: Date.now(),
+    isConnected: true,
+  };
+
+  activeSessions.set(streamSid, session);
+
+  console.log('[Voice Stream] Session created:', {
+    callSid,
+    streamSid,
+    callId,
+    activeSessions: activeSessions.size,
+  });
+
+  return session;
+}
+
+/**
+ * Clean up a session when the call ends
+ */
+async function cleanupSession(streamSid: string): Promise<void> {
+  const session = activeSessions.get(streamSid);
+  if (!session) {
+    return;
+  }
+
+  console.log('[Voice Stream] Cleaning up session:', streamSid);
+
+  session.isConnected = false;
+
+  // Disconnect from OpenAI
+  try {
+    session.openaiClient.disconnect('call_ended');
+  } catch (error) {
+    console.error('[Voice Stream] Error disconnecting OpenAI:', error);
+  }
+
+  // Save any pending transcripts
+  await savePendingTranscript(streamSid);
+
+  // Remove from active sessions
+  activeSessions.delete(streamSid);
+  pendingTranscripts.delete(streamSid);
+
+  const duration = Math.floor((Date.now() - session.startTime) / 1000);
+  console.log('[Voice Stream] Session cleaned up:', {
+    streamSid,
+    duration,
+    activeSessions: activeSessions.size,
+  });
+}
+
+// =============================================================================
+// OpenAI Event Handlers
+// =============================================================================
+
+/**
+ * Set up handlers for OpenAI Realtime client events
+ */
+function setupOpenAIHandlers(
+  openaiClient: OpenAIRealtimeClient,
+  twilioWs: WebSocket,
+  streamSid: string,
+  callId: string | null
+): void {
+  // Handle audio from OpenAI (Earl's voice)
+  openaiClient.on('audio', (data: { audio: string; responseId: string; itemId: string }) => {
+    if (twilioWs.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    // Send audio to Twilio
+    const message: TwilioStreamOutgoingMedia = {
+      event: 'media',
+      streamSid,
+      media: {
+        payload: data.audio,
+      },
+    };
+
+    twilioWs.send(JSON.stringify(message));
+  });
+
+  // Handle transcripts from OpenAI (Earl's words)
+  openaiClient.on('transcript', (data: {
+    text: string;
+    responseId: string;
+    itemId: string;
+    isFinal: boolean;
+  }) => {
+    if (data.isFinal && data.text && callId) {
+      // Save Earl's transcript to database
+      saveTranscriptSegment(callId, Speaker.EARL, data.text).catch((error) => {
+        console.error('[Voice Stream] Error saving Earl transcript:', error);
+      });
+    }
+  });
+
+  // Handle input transcripts (scammer's words)
+  openaiClient.on('inputTranscript', (data: { text: string; itemId: string }) => {
+    if (data.text && callId) {
+      // Accumulate scammer transcript
+      const key = streamSid;
+      const pending = pendingTranscripts.get(key);
+
+      if (pending && pending.speaker === Speaker.SCAMMER) {
+        pending.text += ' ' + data.text;
+      } else {
+        // Save previous pending transcript and start new one
+        if (pending) {
+          saveTranscriptSegment(callId, pending.speaker, pending.text).catch((error) => {
+            console.error('[Voice Stream] Error saving pending transcript:', error);
+          });
+        }
+        pendingTranscripts.set(key, {
+          speaker: Speaker.SCAMMER,
+          text: data.text,
+          startTime: Date.now(),
+        });
+      }
+    }
+  });
+
+  // Handle speech started (scammer started talking)
+  openaiClient.on('speechStarted', () => {
+    console.log('[Voice Stream] Speech started (scammer talking)');
+
+    // Clear Twilio's audio buffer when scammer interrupts
+    if (twilioWs.readyState === WebSocket.OPEN) {
+      const clearMessage: TwilioStreamClear = {
+        event: 'clear',
+        streamSid,
+      };
+      twilioWs.send(JSON.stringify(clearMessage));
+    }
+  });
+
+  // Handle speech stopped
+  openaiClient.on('speechStopped', () => {
+    console.log('[Voice Stream] Speech stopped (scammer stopped talking)');
+
+    // Save accumulated scammer transcript
+    savePendingTranscript(streamSid).catch((error) => {
+      console.error('[Voice Stream] Error saving pending transcript:', error);
+    });
+  });
+
+  // Handle response complete
+  openaiClient.on('responseComplete', (data: { responseId: string; status: string }) => {
+    console.log('[Voice Stream] Response complete:', data.responseId);
+  });
+
+  // Handle errors
+  openaiClient.on('error', (error) => {
+    console.error('[Voice Stream] OpenAI error:', error);
+  });
+
+  // Handle disconnection
+  openaiClient.on('disconnect', (reason: string) => {
+    console.log('[Voice Stream] OpenAI disconnected:', reason);
+  });
+
+  // Handle state changes
+  openaiClient.on('stateChange', (state: string) => {
+    console.log('[Voice Stream] OpenAI state changed:', state);
+  });
+}
+
+// =============================================================================
+// Transcript Management
+// =============================================================================
+
+/**
+ * Save a transcript segment to the database
+ */
+async function saveTranscriptSegment(
+  callId: string,
+  speaker: Speaker,
+  text: string
+): Promise<void> {
+  if (!text.trim()) {
+    return;
+  }
+
+  try {
+    await prisma.callSegment.create({
+      data: {
+        callId,
+        speaker,
+        text: text.trim(),
+        timestamp: Date.now() / 1000, // Convert to seconds
+      },
+    });
+
+    console.log('[Voice Stream] Saved transcript segment:', {
+      callId,
+      speaker,
+      textLength: text.length,
+    });
+  } catch (error) {
+    console.error('[Voice Stream] Error saving transcript segment:', error);
+  }
+}
+
+/**
+ * Save any pending transcript for a stream
+ */
+async function savePendingTranscript(streamSid: string): Promise<void> {
+  const session = activeSessions.get(streamSid);
+  const pending = pendingTranscripts.get(streamSid);
+
+  if (pending && session?.callId && pending.text.trim()) {
+    await saveTranscriptSegment(session.callId, pending.speaker, pending.text);
+    pendingTranscripts.delete(streamSid);
+  }
+}
+
+// =============================================================================
+// Twilio WebSocket Message Handlers
+// =============================================================================
+
+/**
+ * Handle incoming WebSocket messages from Twilio
+ */
+async function handleTwilioMessage(
+  twilioWs: WebSocket,
+  data: string
+): Promise<void> {
+  let event: TwilioStreamEvent;
+
+  try {
+    event = JSON.parse(data);
+  } catch (error) {
+    console.error('[Voice Stream] Failed to parse message:', error);
+    return;
+  }
+
+  switch (event.event) {
+    case 'connected':
+      console.log('[Voice Stream] Twilio connected:', {
+        protocol: event.protocol,
+        version: event.version,
+      });
+      break;
+
+    case 'start':
+      await handleStart(twilioWs, event);
+      break;
+
+    case 'media':
+      handleMedia(event);
+      break;
+
+    case 'stop':
+      await handleStop(event);
+      break;
+
+    case 'mark':
+      console.log('[Voice Stream] Mark received:', event.mark?.name);
+      break;
+
+    default:
+      console.log('[Voice Stream] Unknown event type:', (event as TwilioStreamEvent).event);
+  }
+}
+
+/**
+ * Handle the 'start' event from Twilio
+ */
+async function handleStart(
+  twilioWs: WebSocket,
+  event: TwilioStreamStartEvent
+): Promise<void> {
+  console.log('[Voice Stream] Stream started:', {
+    callSid: event.start.callSid,
+    streamSid: event.streamSid,
+    mediaFormat: event.start.mediaFormat,
+  });
+
+  try {
+    await createSession(event, twilioWs);
+  } catch (error) {
+    console.error('[Voice Stream] Failed to create session:', error);
+    // Close the WebSocket if we can't create a session
+    twilioWs.close(1011, 'Failed to initialize session');
+  }
+}
+
+/**
+ * Handle 'media' events from Twilio (audio chunks)
+ */
+function handleMedia(event: TwilioStreamMediaEvent): void {
+  const session = activeSessions.get(event.streamSid);
+  if (!session || !session.isConnected) {
+    return;
+  }
+
+  // Update activity timestamp
+  session.lastActivityTime = Date.now();
+
+  // Forward audio to OpenAI
+  // The payload is base64-encoded mulaw audio, which OpenAI accepts directly
+  try {
+    session.openaiClient.sendAudio(event.media.payload);
+  } catch (error) {
+    console.error('[Voice Stream] Error sending audio to OpenAI:', error);
+  }
+}
+
+/**
+ * Handle the 'stop' event from Twilio
+ */
+async function handleStop(event: TwilioStreamEvent): Promise<void> {
+  const streamSid = event.streamSid;
+  if (!streamSid) {
+    return;
+  }
+
+  console.log('[Voice Stream] Stream stopped:', streamSid);
+  await cleanupSession(streamSid);
+}
+
+// =============================================================================
+// WebSocket Connection Handler
+// =============================================================================
+
+/**
+ * Handle a new WebSocket connection from Twilio
+ */
+function handleConnection(twilioWs: WebSocket, request: IncomingMessage): void {
+  const clientIp = request.socket.remoteAddress;
+  console.log('[Voice Stream] New WebSocket connection from:', clientIp);
+
+  twilioWs.on('message', async (data: Buffer | string) => {
+    try {
+      const message = typeof data === 'string' ? data : data.toString();
+      await handleTwilioMessage(twilioWs, message);
+    } catch (error) {
+      console.error('[Voice Stream] Error handling message:', error);
+    }
+  });
+
+  twilioWs.on('close', (code: number, reason: Buffer) => {
+    console.log('[Voice Stream] WebSocket closed:', {
+      code,
+      reason: reason.toString(),
+    });
+
+    // Clean up any sessions associated with this WebSocket
+    for (const [streamSid, session] of activeSessions.entries()) {
+      if (session.isConnected) {
+        cleanupSession(streamSid).catch((error) => {
+          console.error('[Voice Stream] Error cleaning up session:', error);
+        });
+      }
+    }
+  });
+
+  twilioWs.on('error', (error: Error) => {
+    console.error('[Voice Stream] WebSocket error:', error);
+  });
+}
+
+// =============================================================================
+// Route Handler
+// =============================================================================
+
+/**
+ * GET handler - upgrades HTTP to WebSocket
+ *
+ * Note: Next.js doesn't natively support WebSocket upgrades in App Router.
+ * This implementation uses a workaround that works in development and
+ * with certain deployment configurations.
+ *
+ * For production, you may need to:
+ * 1. Use a custom server (e.g., with express/fastify)
+ * 2. Deploy to a platform that supports WebSocket upgrades
+ * 3. Use a separate WebSocket service
+ */
+export async function GET(request: Request): Promise<Response> {
+  // Check if this is a WebSocket upgrade request
   const upgradeHeader = request.headers.get('upgrade');
 
   if (upgradeHeader !== 'websocket') {
-    return NextResponse.json(
-      {
-        error: 'WebSocket upgrade required',
-        message: 'This endpoint only accepts WebSocket connections from Twilio Media Streams'
+    return new Response('Expected WebSocket upgrade request', {
+      status: 426,
+      headers: {
+        'Upgrade': 'websocket',
+        'Connection': 'Upgrade',
       },
-      { status: 426 }
-    );
+    });
   }
 
-  // In a real deployment, you would handle the WebSocket upgrade here
-  // For Next.js App Router, WebSocket handling requires additional setup:
-  // 1. Use a custom server (e.g., with ws library)
-  // 2. Use Vercel's Edge Runtime with WebSocket support
-  // 3. Use a separate WebSocket server
+  // In Next.js App Router, we need to access the underlying Node.js
+  // request and response objects for WebSocket upgrade
+  // This is a simplified implementation - in production you'd use
+  // a custom server or middleware
+  try {
+    // Access the raw request/response if available (custom server setup)
+    // @ts-expect-error - Accessing internals for WebSocket upgrade
+    const socket = request.socket;
+    // @ts-expect-error - Accessing internals for WebSocket upgrade
+    const head = request.head || Buffer.alloc(0);
 
-  return NextResponse.json(
-    {
-      error: 'WebSocket not configured',
-      message:
-        'WebSocket connections require custom server setup. See VoiceStreamHandler class for implementation.'
+    if (socket) {
+      const wssInstance = getWebSocketServer();
+
+      wssInstance.handleUpgrade(request as unknown as IncomingMessage, socket, head, (ws) => {
+        wssInstance.emit('connection', ws, request);
+        handleConnection(ws, request as unknown as IncomingMessage);
+      });
+
+      // Return empty response as WebSocket takes over
+      return new Response(null, { status: 101 });
+    }
+  } catch {
+    // WebSocket upgrade not available in this context
+    console.warn('[Voice Stream] WebSocket upgrade not available in this deployment context');
+  }
+
+  // Fallback response for environments that don't support WebSocket
+  return new Response(JSON.stringify({
+    error: 'WebSocket upgrade not supported in this deployment context',
+    message: 'Please deploy with a custom server that supports WebSocket upgrades',
+    documentation: 'https://www.twilio.com/docs/voice/media-streams',
+  }), {
+    status: 501,
+    headers: {
+      'Content-Type': 'application/json',
     },
-    { status: 501 }
-  );
-}
-
-/**
- * Health check / info endpoint
- */
-export async function POST(request: NextRequest) {
-  // This endpoint can be used for testing or receiving webhook data
-  return NextResponse.json({
-    status: 'ok',
-    message: 'Voice stream endpoint is available',
-    websocket: 'wss://your-domain.com/api/voice/stream'
   });
 }
 
 /**
- * VoiceStreamHandler class
- *
- * This class handles the WebSocket connection lifecycle and audio bridging
- * between Twilio and OpenAI. Use this with a custom WebSocket server.
- *
- * Example usage with ws library:
- *
- * ```typescript
- * import { WebSocketServer } from 'ws';
- * import { VoiceStreamHandler } from './route';
- *
- * const wss = new WebSocketServer({ path: '/api/voice/stream' });
- *
- * wss.on('connection', (ws, req) => {
- *   const handler = new VoiceStreamHandler(ws);
- *   handler.initialize();
- * });
- * ```
+ * POST handler - alternative HTTP-based endpoint for testing
  */
-export class VoiceStreamHandler {
-  private ws: WebSocket;
-  private connection: StreamConnection | null = null;
-  private isClosing: boolean = false;
+export async function POST(request: Request): Promise<Response> {
+  // This endpoint can be used for health checks or testing
+  const body = await request.json().catch(() => ({}));
 
-  constructor(websocket: WebSocket) {
-    this.ws = websocket;
-  }
-
-  /**
-   * Initialize the handler and set up event listeners
-   */
-  async initialize(): Promise<void> {
-    console.log('[VoiceStream] New WebSocket connection');
-
-    this.ws.addEventListener('message', (event) => this.handleMessage(event));
-    this.ws.addEventListener('close', () => this.handleClose());
-    this.ws.addEventListener('error', (error) => this.handleError(error));
-  }
-
-  /**
-   * Handle incoming WebSocket messages from Twilio
-   */
-  private async handleMessage(event: MessageEvent): Promise<void> {
-    const message = TwilioClient.parseStreamMessage(
-      typeof event.data === 'string' ? event.data : event.data.toString()
-    );
-
-    if (!message) {
-      console.warn('[VoiceStream] Failed to parse message');
-      return;
-    }
-
-    switch (message.event) {
-      case 'connected':
-        console.log('[VoiceStream] Twilio connected');
-        break;
-
-      case 'start':
-        await this.handleStart(message as TwilioStartEvent);
-        break;
-
-      case 'media':
-        this.handleMedia(message as TwilioMediaEvent);
-        break;
-
-      case 'stop':
-        await this.handleStop();
-        break;
-
-      case 'mark':
-        // Handle synchronization marks if needed
-        console.log('[VoiceStream] Mark received:', (message as { mark: { name: string } }).mark.name);
-        break;
-
-      default:
-        console.log('[VoiceStream] Unknown event:', (message as TwilioMediaStreamMessage).event);
-    }
-  }
-
-  /**
-   * Handle stream start event from Twilio
-   */
-  private async handleStart(message: TwilioStartEvent): Promise<void> {
-    const { streamSid, callSid, mediaFormat } = message.start;
-
-    console.log('[VoiceStream] Stream started:', {
-      streamSid,
-      callSid,
-      encoding: mediaFormat.encoding,
-      sampleRate: mediaFormat.sampleRate
-    });
-
-    try {
-      // Create OpenAI Realtime connection
-      const openai = createOpenAIClient();
-
-      // Set up OpenAI event handlers
-      this.setupOpenAIHandlers(openai, streamSid);
-
-      // Connect to OpenAI
-      await openai.connect();
-
-      // Create or find the call record
-      const callId = await this.findOrCreateCall(callSid);
-
-      // Store connection state
-      this.connection = {
-        callSid,
-        streamSid,
-        openai,
-        callId,
-        startTime: Date.now(),
-        lastTranscriptTime: 0
-      };
-
-      activeConnections.set(streamSid, this.connection);
-
-      console.log('[VoiceStream] Connection established for call:', callSid);
-    } catch (error) {
-      console.error('[VoiceStream] Failed to initialize:', error);
-      this.ws.close(1011, 'Failed to initialize OpenAI connection');
-    }
-  }
-
-  /**
-   * Handle incoming media (audio) from Twilio
-   */
-  private handleMedia(message: TwilioMediaEvent): void {
-    if (!this.connection?.openai.connected) {
-      return;
-    }
-
-    // Decode base64 audio payload and send to OpenAI
-    const audioBuffer = Buffer.from(message.media.payload, 'base64');
-    this.connection.openai.sendAudio(audioBuffer);
-  }
-
-  /**
-   * Handle stream stop event
-   */
-  private async handleStop(): Promise<void> {
-    console.log('[VoiceStream] Stream stopping');
-    await this.cleanup();
-  }
-
-  /**
-   * Handle WebSocket close
-   */
-  private async handleClose(): Promise<void> {
-    console.log('[VoiceStream] WebSocket closed');
-    await this.cleanup();
-  }
-
-  /**
-   * Handle WebSocket errors
-   */
-  private handleError(error: Event): void {
-    console.error('[VoiceStream] WebSocket error:', error);
-  }
-
-  /**
-   * Set up OpenAI Realtime event handlers
-   */
-  private setupOpenAIHandlers(openai: OpenAIRealtimeClient, streamSid: string): void {
-    // Handle audio responses from Earl
-    openai.on('audio', (audioBuffer: Buffer) => {
-      if (this.isClosing) return;
-
-      // Send audio back to Twilio
-      const message = TwilioClient.createMediaMessage(
-        streamSid,
-        audioBuffer.toString('base64')
-      );
-
-      if (this.ws.readyState === WebSocket.OPEN) {
-        this.ws.send(message);
-      }
-    });
-
-    // Handle transcript events for database storage
-    openai.on('transcript', async (text: string, speaker: 'earl' | 'caller') => {
-      if (!this.connection?.callId || !text.trim()) return;
-
-      const timestamp = Math.floor((Date.now() - this.connection.startTime) / 1000);
-
-      try {
-        await prisma.callSegment.create({
-          data: {
-            callId: this.connection.callId,
-            speaker: speaker === 'earl' ? Speaker.EARL : Speaker.SCAMMER,
-            text: text.trim(),
-            timestamp
-          }
-        });
-
-        this.connection.lastTranscriptTime = timestamp;
-        console.log(`[VoiceStream] Transcript saved [${speaker}]: ${text.substring(0, 50)}...`);
-      } catch (error) {
-        console.error('[VoiceStream] Failed to save transcript:', error);
-      }
-    });
-
-    // Handle response lifecycle events
-    openai.on('response_start', () => {
-      console.log('[VoiceStream] Earl is responding...');
-    });
-
-    openai.on('response_end', () => {
-      // Send a mark for synchronization
-      if (this.ws.readyState === WebSocket.OPEN) {
-        const mark = TwilioClient.createMarkMessage(streamSid, `response-${Date.now()}`);
-        this.ws.send(mark);
-      }
-    });
-
-    // Handle OpenAI errors
-    openai.on('error', (error: Error) => {
-      console.error('[VoiceStream] OpenAI error:', error);
-    });
-
-    // Handle disconnection
-    openai.on('disconnected', () => {
-      console.log('[VoiceStream] OpenAI disconnected');
-      if (!this.isClosing) {
-        this.cleanup();
-      }
-    });
-  }
-
-  /**
-   * Find existing call or create a placeholder
-   */
-  private async findOrCreateCall(callSid: string): Promise<string | null> {
-    try {
-      // Try to find existing call record
-      const existingCall = await prisma.call.findUnique({
-        where: { twilioSid: callSid },
-        select: { id: true }
-      });
-
-      if (existingCall) {
-        // Update status to IN_PROGRESS
-        await prisma.call.update({
-          where: { id: existingCall.id },
-          data: { status: 'IN_PROGRESS' }
-        });
-        return existingCall.id;
-      }
-
-      // If no existing call, the incoming webhook hasn't created it yet
-      // We'll try again later or let the incoming webhook handle it
-      console.log('[VoiceStream] Call record not found for:', callSid);
-      return null;
-    } catch (error) {
-      console.error('[VoiceStream] Database error:', error);
-      return null;
-    }
-  }
-
-  /**
-   * Clean up resources when connection ends
-   */
-  private async cleanup(): Promise<void> {
-    if (this.isClosing) return;
-    this.isClosing = true;
-
-    console.log('[VoiceStream] Cleaning up connection');
-
-    if (this.connection) {
-      // Disconnect OpenAI
-      this.connection.openai.disconnect();
-
-      // Update call duration if we have a call record
-      if (this.connection.callId) {
-        const duration = Math.floor((Date.now() - this.connection.startTime) / 1000);
-
-        try {
-          await prisma.call.update({
-            where: { id: this.connection.callId },
-            data: {
-              status: 'COMPLETED',
-              duration
-            }
-          });
-          console.log(`[VoiceStream] Call completed, duration: ${duration}s`);
-        } catch (error) {
-          console.error('[VoiceStream] Failed to update call:', error);
-        }
-      }
-
-      // Remove from active connections
-      activeConnections.delete(this.connection.streamSid);
-    }
-
-    // Close WebSocket if still open
-    if (this.ws.readyState === WebSocket.OPEN) {
-      this.ws.close(1000, 'Stream ended');
-    }
-  }
+  return new Response(JSON.stringify({
+    status: 'ok',
+    message: 'Voice stream handler is running',
+    activeSessions: activeSessions.size,
+    timestamp: new Date().toISOString(),
+    ...body,
+  }), {
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
 }
 
-/**
- * Create a WebSocket server handler for use with a custom server
- *
- * Example integration with a custom Next.js server:
- *
- * ```typescript
- * // server.ts
- * import { createServer } from 'http';
- * import { parse } from 'url';
- * import next from 'next';
- * import { WebSocketServer } from 'ws';
- * import { createVoiceStreamServer } from './src/app/api/voice/stream/route';
- *
- * const app = next({ dev: process.env.NODE_ENV !== 'production' });
- * const handle = app.getRequestHandler();
- *
- * app.prepare().then(() => {
- *   const server = createServer((req, res) => {
- *     handle(req, res);
- *   });
- *
- *   createVoiceStreamServer(server);
- *
- *   server.listen(3000);
- * });
- * ```
- */
-export function createVoiceStreamServer(httpServer: unknown): void {
-  // This would be implemented with the ws library
-  // Keeping as a stub for documentation purposes
-  console.log('[VoiceStream] Creating WebSocket server (stub)');
+// =============================================================================
+// Exports for Testing
+// =============================================================================
 
-  // In actual implementation:
-  // const wss = new WebSocketServer({ server: httpServer, path: '/api/voice/stream' });
-  // wss.on('connection', (ws) => {
-  //   const handler = new VoiceStreamHandler(ws as unknown as WebSocket);
-  //   handler.initialize();
-  // });
-}
-
-/**
- * Get count of active connections
- */
-export function getActiveConnectionCount(): number {
-  return activeConnections.size;
-}
-
-/**
- * Get active connection by stream SID
- */
-export function getActiveConnection(streamSid: string): StreamConnection | undefined {
-  return activeConnections.get(streamSid);
-}
+export const __testing__ = {
+  activeSessions,
+  pendingTranscripts,
+  createSession,
+  cleanupSession,
+  handleTwilioMessage,
+  saveTranscriptSegment,
+};

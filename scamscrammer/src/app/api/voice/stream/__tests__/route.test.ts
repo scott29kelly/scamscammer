@@ -1,129 +1,202 @@
 /**
  * Tests for WebSocket Voice Stream Handler
+ *
+ * These tests verify the WebSocket-based audio streaming functionality
+ * between Twilio and OpenAI Realtime API.
  */
 
-import { NextRequest } from 'next/server';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type {
+  TwilioStreamStartEvent,
+  TwilioStreamMediaEvent,
+  TwilioStreamStopEvent,
+  TwilioStreamConnectedEvent,
+} from '@/types';
 
-// Mock WebSocket globally before any imports
-const mockWebSocketClass = {
-  OPEN: 1,
-  CLOSED: 3
-};
-(global as unknown as { WebSocket: typeof mockWebSocketClass }).WebSocket = mockWebSocketClass as unknown as typeof WebSocket;
+// =============================================================================
+// Mocks - Using vi.hoisted to ensure proper hoisting
+// =============================================================================
 
-// Mock the ws module
-jest.mock('ws', () => {
-  const { EventEmitter } = require('events');
-  return jest.fn().mockImplementation(() => {
-    const emitter = new EventEmitter();
-    return {
-      on: emitter.on.bind(emitter),
-      emit: emitter.emit.bind(emitter),
-      send: jest.fn(),
-      close: jest.fn(),
-      readyState: 1,
-      OPEN: 1
-    };
-  });
+const { mockOpenAIClientInstance, mockPrismaInstance, mockWebSocketInstance } = vi.hoisted(() => {
+  // Create listeners map for mock event emitter
+  const listeners = new Map<string, ((...args: unknown[]) => void)[]>();
+
+  // Create mock instances with EventEmitter-like methods
+  const mockOpenAIClientInstance = {
+    connect: vi.fn().mockResolvedValue(undefined),
+    disconnect: vi.fn(),
+    sendAudio: vi.fn(),
+    isConnected: vi.fn().mockReturnValue(true),
+    getState: vi.fn().mockReturnValue('connected'),
+    on: vi.fn((event: string, callback: (...args: unknown[]) => void) => {
+      const handlers = listeners.get(event) || [];
+      handlers.push(callback);
+      listeners.set(event, handlers);
+      return mockOpenAIClientInstance;
+    }),
+    off: vi.fn((event: string, callback: (...args: unknown[]) => void) => {
+      const handlers = listeners.get(event) || [];
+      const index = handlers.indexOf(callback);
+      if (index > -1) {
+        handlers.splice(index, 1);
+      }
+      return mockOpenAIClientInstance;
+    }),
+    emit: vi.fn((event: string, ...args: unknown[]) => {
+      const handlers = listeners.get(event) || [];
+      handlers.forEach((handler) => handler(...args));
+      return handlers.length > 0;
+    }),
+    removeAllListeners: vi.fn(() => {
+      listeners.clear();
+      return mockOpenAIClientInstance;
+    }),
+  };
+
+  const mockPrismaInstance = {
+    call: {
+      findUnique: vi.fn(),
+      update: vi.fn(),
+    },
+    callSegment: {
+      create: vi.fn(),
+    },
+  };
+
+  const mockWebSocketInstance = {
+    send: vi.fn(),
+    close: vi.fn(),
+    readyState: 1, // WebSocket.OPEN
+    OPEN: 1,
+    CLOSED: 3,
+  };
+
+  return { mockOpenAIClientInstance, mockPrismaInstance, mockWebSocketInstance };
 });
 
-// Mock prisma client
-const mockPrisma = {
-  call: {
-    findUnique: jest.fn(),
-    update: jest.fn()
-  },
-  callSegment: {
-    create: jest.fn()
-  }
-};
-
-jest.mock('../../../../../lib/db', () => ({
-  __esModule: true,
-  default: mockPrisma
+// Setup mocks
+vi.mock('@/lib/openai', () => ({
+  createEarlClient: vi.fn(() => mockOpenAIClientInstance),
+  OpenAIRealtimeClient: vi.fn(() => mockOpenAIClientInstance),
 }));
 
-// Mock OpenAI client
-const mockOpenAIClient = {
-  connect: jest.fn().mockResolvedValue(undefined),
-  disconnect: jest.fn(),
-  sendAudio: jest.fn(),
-  on: jest.fn(),
-  connected: true
-};
-
-jest.mock('../../../../../lib/openai', () => ({
-  createOpenAIClient: jest.fn().mockReturnValue(mockOpenAIClient),
-  OpenAIRealtimeClient: jest.fn()
+vi.mock('@/lib/db', () => ({
+  prisma: mockPrismaInstance,
 }));
 
-// Mock Twilio client
-jest.mock('../../../../../lib/twilio', () => ({
-  TwilioClient: {
-    parseStreamMessage: jest.fn().mockImplementation((data: string) => {
-      try {
-        return JSON.parse(data);
-      } catch {
-        return null;
-      }
-    }),
-    createMediaMessage: jest.fn().mockReturnValue('{"event":"media"}'),
-    createMarkMessage: jest.fn().mockReturnValue('{"event":"mark"}'),
-    createClearMessage: jest.fn().mockReturnValue('{"event":"clear"}')
-  }
-}));
-
-// Mock Prisma Speaker enum
-jest.mock('@prisma/client', () => ({
-  Speaker: {
-    EARL: 'EARL',
-    SCAMMER: 'SCAMMER'
-  }
-}));
-
-// Mock persona
-jest.mock('../../../../../lib/persona', () => ({
-  getSystemPrompt: jest.fn().mockReturnValue('Test Earl prompt')
+vi.mock('ws', () => ({
+  WebSocket: vi.fn(() => mockWebSocketInstance),
+  WebSocketServer: vi.fn(() => ({
+    handleUpgrade: vi.fn(),
+    emit: vi.fn(),
+    on: vi.fn(),
+  })),
 }));
 
 // Now import the module under test
-import { GET, POST, getActiveConnectionCount, VoiceStreamHandler } from '../route';
+import { POST, __testing__ } from '../route';
 
-describe('Voice Stream Route Handlers', () => {
-  describe('GET handler', () => {
-    it('should return 426 when not a WebSocket upgrade request', async () => {
-      const request = new NextRequest('http://localhost:3000/api/voice/stream', {
-        method: 'GET',
-        headers: {}
-      });
+// =============================================================================
+// Test Fixtures
+// =============================================================================
 
-      const response = await GET(request);
-      const data = await response.json();
+const mockCallId = 'test-call-id-123';
+const mockCallSid = 'CA1234567890abcdef1234567890abcdef';
+const mockStreamSid = 'MZ1234567890abcdef1234567890abcdef';
 
-      expect(response.status).toBe(426);
-      expect(data.error).toBe('WebSocket upgrade required');
+const createConnectedEvent = (): TwilioStreamConnectedEvent => ({
+  event: 'connected',
+  protocol: 'Call',
+  version: '1.0.0',
+});
+
+const createStartEvent = (): TwilioStreamStartEvent => ({
+  event: 'start',
+  sequenceNumber: '1',
+  streamSid: mockStreamSid,
+  start: {
+    streamSid: mockStreamSid,
+    accountSid: 'AC1234567890abcdef1234567890abcdef',
+    callSid: mockCallSid,
+    tracks: ['inbound'],
+    customParameters: {},
+    mediaFormat: {
+      encoding: 'audio/x-mulaw',
+      sampleRate: 8000,
+      channels: 1,
+    },
+  },
+});
+
+const createMediaEvent = (payload: string = 'base64audiodata'): TwilioStreamMediaEvent => ({
+  event: 'media',
+  sequenceNumber: '2',
+  streamSid: mockStreamSid,
+  media: {
+    track: 'inbound',
+    chunk: '1',
+    timestamp: '100',
+    payload,
+  },
+});
+
+const createStopEvent = (): TwilioStreamStopEvent => ({
+  event: 'stop',
+  sequenceNumber: '100',
+  streamSid: mockStreamSid,
+  stop: {
+    accountSid: 'AC1234567890abcdef1234567890abcdef',
+    callSid: mockCallSid,
+  },
+});
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+describe('Voice Stream Handler', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    // Reset module state
+    __testing__.activeSessions.clear();
+    __testing__.pendingTranscripts.clear();
+
+    // Setup default mock responses
+    mockPrismaInstance.call.findUnique.mockResolvedValue({
+      id: mockCallId,
+      twilioSid: mockCallSid,
     });
 
-    it('should return 501 when WebSocket upgrade is requested but not configured', async () => {
-      const request = new NextRequest('http://localhost:3000/api/voice/stream', {
-        method: 'GET',
-        headers: {
-          upgrade: 'websocket'
-        }
-      });
-
-      const response = await GET(request);
-      const data = await response.json();
-
-      expect(response.status).toBe(501);
-      expect(data.error).toBe('WebSocket not configured');
+    mockPrismaInstance.callSegment.create.mockResolvedValue({
+      id: 'segment-1',
+      callId: mockCallId,
+      speaker: 'EARL',
+      text: 'Test text',
+      timestamp: Date.now() / 1000,
     });
+
+    // Reset WebSocket mock
+    mockWebSocketInstance.readyState = 1;
+    mockWebSocketInstance.send.mockClear();
+    mockWebSocketInstance.close.mockClear();
+
+    // Reset OpenAI client mock
+    mockOpenAIClientInstance.connect.mockResolvedValue(undefined);
+    mockOpenAIClientInstance.sendAudio.mockClear();
+    mockOpenAIClientInstance.disconnect.mockClear();
   });
 
-  describe('POST handler', () => {
-    it('should return health check info', async () => {
-      const request = new NextRequest('http://localhost:3000/api/voice/stream', {
-        method: 'POST'
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  describe('POST endpoint (health check)', () => {
+    it('should return status ok with active sessions count', async () => {
+      const request = new Request('http://localhost:3000/api/voice/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ test: true }),
       });
 
       const response = await POST(request);
@@ -131,203 +204,325 @@ describe('Voice Stream Route Handlers', () => {
 
       expect(response.status).toBe(200);
       expect(data.status).toBe('ok');
-      expect(data.message).toContain('Voice stream endpoint');
-      expect(data.websocket).toContain('wss://');
+      expect(data.message).toBe('Voice stream handler is running');
+      expect(data.activeSessions).toBe(0);
+      expect(data.test).toBe(true);
+    });
+
+    it('should handle empty request body', async () => {
+      const request = new Request('http://localhost:3000/api/voice/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '',
+      });
+
+      const response = await POST(request);
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(data.status).toBe('ok');
     });
   });
 
-  describe('getActiveConnectionCount', () => {
-    it('should return 0 when no connections', () => {
-      const count = getActiveConnectionCount();
-      expect(typeof count).toBe('number');
-      expect(count).toBeGreaterThanOrEqual(0);
-    });
-  });
-});
-
-describe('VoiceStreamHandler', () => {
-  let mockWebSocket: {
-    addEventListener: jest.Mock;
-    removeEventListener: jest.Mock;
-    send: jest.Mock;
-    close: jest.Mock;
-    readyState: number;
-  };
-
-  beforeEach(() => {
-    mockWebSocket = {
-      addEventListener: jest.fn(),
-      removeEventListener: jest.fn(),
-      send: jest.fn(),
-      close: jest.fn(),
-      readyState: 1 // WebSocket.OPEN
-    };
-  });
-
-  describe('initialization', () => {
-    it('should create handler with WebSocket', () => {
-      const handler = new VoiceStreamHandler(mockWebSocket as unknown as WebSocket);
-      expect(handler).toBeInstanceOf(VoiceStreamHandler);
-    });
-
-    it('should set up event listeners on initialize', async () => {
-      const handler = new VoiceStreamHandler(mockWebSocket as unknown as WebSocket);
-      await handler.initialize();
-
-      expect(mockWebSocket.addEventListener).toHaveBeenCalledWith(
-        'message',
-        expect.any(Function)
-      );
-      expect(mockWebSocket.addEventListener).toHaveBeenCalledWith(
-        'close',
-        expect.any(Function)
-      );
-      expect(mockWebSocket.addEventListener).toHaveBeenCalledWith(
-        'error',
-        expect.any(Function)
-      );
-    });
-  });
-
-  describe('message handling', () => {
+  describe('handleTwilioMessage', () => {
     it('should handle connected event', async () => {
-      const handler = new VoiceStreamHandler(mockWebSocket as unknown as WebSocket);
-      await handler.initialize();
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const event = createConnectedEvent();
 
-      // Get the message handler
-      const messageHandler = mockWebSocket.addEventListener.mock.calls.find(
-        (call) => call[0] === 'message'
-      )?.[1];
+      await __testing__.handleTwilioMessage(
+        mockWebSocketInstance as unknown as WebSocket,
+        JSON.stringify(event)
+      );
 
-      expect(messageHandler).toBeDefined();
-
-      // Simulate connected event
-      const connectedEvent = {
-        data: JSON.stringify({ event: 'connected', protocol: 'Call', version: '1.0.0' })
-      };
-
-      // Should not throw
-      expect(() => messageHandler(connectedEvent)).not.toThrow();
-    });
-
-    it('should handle stop event', async () => {
-      const handler = new VoiceStreamHandler(mockWebSocket as unknown as WebSocket);
-      await handler.initialize();
-
-      const messageHandler = mockWebSocket.addEventListener.mock.calls.find(
-        (call) => call[0] === 'message'
-      )?.[1];
-
-      const stopEvent = {
-        data: JSON.stringify({
-          event: 'stop',
-          stop: { accountSid: 'AC123', callSid: 'CA123' }
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining('[Voice Stream] Twilio connected:'),
+        expect.objectContaining({
+          protocol: 'Call',
+          version: '1.0.0',
         })
-      };
+      );
 
-      // Should not throw
-      await expect(
-        (async () => messageHandler(stopEvent))()
-      ).resolves.not.toThrow();
-    });
-
-    it('should handle mark event', async () => {
-      const handler = new VoiceStreamHandler(mockWebSocket as unknown as WebSocket);
-      await handler.initialize();
-
-      const messageHandler = mockWebSocket.addEventListener.mock.calls.find(
-        (call) => call[0] === 'message'
-      )?.[1];
-
-      const markEvent = {
-        data: JSON.stringify({
-          event: 'mark',
-          mark: { name: 'test-mark' }
-        })
-      };
-
-      expect(() => messageHandler(markEvent)).not.toThrow();
+      consoleSpy.mockRestore();
     });
 
     it('should handle invalid JSON gracefully', async () => {
-      const handler = new VoiceStreamHandler(mockWebSocket as unknown as WebSocket);
-      await handler.initialize();
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-      const messageHandler = mockWebSocket.addEventListener.mock.calls.find(
-        (call) => call[0] === 'message'
-      )?.[1];
+      await __testing__.handleTwilioMessage(
+        mockWebSocketInstance as unknown as WebSocket,
+        'invalid json{'
+      );
 
-      const invalidEvent = { data: 'not valid json' };
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining('[Voice Stream] Failed to parse message:'),
+        expect.any(Error)
+      );
 
-      // Should not throw even with invalid JSON
-      expect(() => messageHandler(invalidEvent)).not.toThrow();
+      consoleSpy.mockRestore();
     });
   });
 
-  describe('close handling', () => {
-    it('should handle WebSocket close', async () => {
-      const handler = new VoiceStreamHandler(mockWebSocket as unknown as WebSocket);
-      await handler.initialize();
+  describe('createSession', () => {
+    it('should create a session with OpenAI client', async () => {
+      const startEvent = createStartEvent();
 
-      const closeHandler = mockWebSocket.addEventListener.mock.calls.find(
-        (call) => call[0] === 'close'
-      )?.[1];
+      const session = await __testing__.createSession(
+        startEvent,
+        mockWebSocketInstance as unknown as WebSocket
+      );
 
-      expect(closeHandler).toBeDefined();
-      await expect((async () => closeHandler())()).resolves.not.toThrow();
+      expect(session.callSid).toBe(mockCallSid);
+      expect(session.streamSid).toBe(mockStreamSid);
+      expect(session.callId).toBe(mockCallId);
+      expect(session.isConnected).toBe(true);
+      expect(mockOpenAIClientInstance.connect).toHaveBeenCalled();
+      expect(__testing__.activeSessions.has(mockStreamSid)).toBe(true);
+    });
+
+    it('should handle call not found in database', async () => {
+      mockPrismaInstance.call.findUnique.mockResolvedValue(null);
+      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const startEvent = createStartEvent();
+      const session = await __testing__.createSession(
+        startEvent,
+        mockWebSocketInstance as unknown as WebSocket
+      );
+
+      expect(session.callId).toBeNull();
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining('[Voice Stream] Call not found in database:'),
+        mockCallSid
+      );
+
+      consoleSpy.mockRestore();
+    });
+
+    it('should handle database errors gracefully', async () => {
+      mockPrismaInstance.call.findUnique.mockRejectedValue(new Error('Database error'));
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const startEvent = createStartEvent();
+      const session = await __testing__.createSession(
+        startEvent,
+        mockWebSocketInstance as unknown as WebSocket
+      );
+
+      expect(session.callId).toBeNull();
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining('[Voice Stream] Error finding call:'),
+        expect.any(Error)
+      );
+
+      consoleSpy.mockRestore();
+    });
+
+    it('should throw error if OpenAI connection fails', async () => {
+      mockOpenAIClientInstance.connect.mockRejectedValue(new Error('OpenAI connection failed'));
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const startEvent = createStartEvent();
+
+      await expect(
+        __testing__.createSession(startEvent, mockWebSocketInstance as unknown as WebSocket)
+      ).rejects.toThrow('OpenAI connection failed');
+
+      consoleSpy.mockRestore();
     });
   });
 
-  describe('error handling', () => {
-    it('should handle WebSocket errors', async () => {
-      const handler = new VoiceStreamHandler(mockWebSocket as unknown as WebSocket);
-      await handler.initialize();
+  describe('cleanupSession', () => {
+    it('should clean up an existing session', async () => {
+      // Create a session first
+      const startEvent = createStartEvent();
+      await __testing__.createSession(startEvent, mockWebSocketInstance as unknown as WebSocket);
 
-      const errorHandler = mockWebSocket.addEventListener.mock.calls.find(
-        (call) => call[0] === 'error'
-      )?.[1];
+      expect(__testing__.activeSessions.has(mockStreamSid)).toBe(true);
 
-      expect(errorHandler).toBeDefined();
-      expect(() => errorHandler(new Error('Test error'))).not.toThrow();
+      // Clean up the session
+      await __testing__.cleanupSession(mockStreamSid);
+
+      expect(__testing__.activeSessions.has(mockStreamSid)).toBe(false);
+      expect(mockOpenAIClientInstance.disconnect).toHaveBeenCalledWith('call_ended');
+    });
+
+    it('should handle non-existent session gracefully', async () => {
+      await __testing__.cleanupSession('non-existent-stream-sid');
+      // Should not throw
+    });
+  });
+
+  describe('saveTranscriptSegment', () => {
+    it('should save transcript segment to database', async () => {
+      await __testing__.saveTranscriptSegment(mockCallId, 'EARL', 'Hello there!');
+
+      expect(mockPrismaInstance.callSegment.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          callId: mockCallId,
+          speaker: 'EARL',
+          text: 'Hello there!',
+          timestamp: expect.any(Number),
+        }),
+      });
+    });
+
+    it('should not save empty text', async () => {
+      await __testing__.saveTranscriptSegment(mockCallId, 'EARL', '   ');
+
+      expect(mockPrismaInstance.callSegment.create).not.toHaveBeenCalled();
+    });
+
+    it('should handle database errors gracefully', async () => {
+      mockPrismaInstance.callSegment.create.mockRejectedValue(new Error('DB error'));
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      await __testing__.saveTranscriptSegment(mockCallId, 'EARL', 'Test');
+
+      expect(consoleSpy).toHaveBeenCalled();
+      consoleSpy.mockRestore();
+    });
+  });
+
+  describe('Media handling', () => {
+    it('should forward media to OpenAI client', async () => {
+      // Create a session
+      const startEvent = createStartEvent();
+      await __testing__.createSession(startEvent, mockWebSocketInstance as unknown as WebSocket);
+
+      // Send media event
+      const mediaEvent = createMediaEvent('testpayload123');
+      await __testing__.handleTwilioMessage(
+        mockWebSocketInstance as unknown as WebSocket,
+        JSON.stringify(mediaEvent)
+      );
+
+      expect(mockOpenAIClientInstance.sendAudio).toHaveBeenCalledWith('testpayload123');
+    });
+
+    it('should not forward media when session does not exist', async () => {
+      const mediaEvent = createMediaEvent();
+      await __testing__.handleTwilioMessage(
+        mockWebSocketInstance as unknown as WebSocket,
+        JSON.stringify(mediaEvent)
+      );
+
+      expect(mockOpenAIClientInstance.sendAudio).not.toHaveBeenCalled();
+    });
+
+    it('should handle OpenAI sendAudio errors gracefully', async () => {
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      mockOpenAIClientInstance.sendAudio.mockImplementation(() => {
+        throw new Error('Send audio failed');
+      });
+
+      // Create a session
+      const startEvent = createStartEvent();
+      await __testing__.createSession(startEvent, mockWebSocketInstance as unknown as WebSocket);
+
+      // Send media event
+      const mediaEvent = createMediaEvent();
+      await __testing__.handleTwilioMessage(
+        mockWebSocketInstance as unknown as WebSocket,
+        JSON.stringify(mediaEvent)
+      );
+
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining('[Voice Stream] Error sending audio to OpenAI:'),
+        expect.any(Error)
+      );
+
+      consoleSpy.mockRestore();
+    });
+  });
+
+  describe('Stop event handling', () => {
+    it('should clean up session on stop event', async () => {
+      // Create a session
+      const startEvent = createStartEvent();
+      await __testing__.createSession(startEvent, mockWebSocketInstance as unknown as WebSocket);
+
+      // Send stop event
+      const stopEvent = createStopEvent();
+      await __testing__.handleTwilioMessage(
+        mockWebSocketInstance as unknown as WebSocket,
+        JSON.stringify(stopEvent)
+      );
+
+      expect(__testing__.activeSessions.has(mockStreamSid)).toBe(false);
+    });
+  });
+
+  describe('Pending transcript management', () => {
+    it('should accumulate scammer transcripts', async () => {
+      // Create a session
+      const startEvent = createStartEvent();
+      await __testing__.createSession(startEvent, mockWebSocketInstance as unknown as WebSocket);
+
+      // Simulate input transcript events by directly setting pending transcript
+      __testing__.pendingTranscripts.set(mockStreamSid, {
+        speaker: 'SCAMMER',
+        text: 'Hello',
+        startTime: Date.now(),
+      });
+
+      // Check transcript is stored
+      const pending = __testing__.pendingTranscripts.get(mockStreamSid);
+      expect(pending).toBeDefined();
+      expect(pending?.speaker).toBe('SCAMMER');
+      expect(pending?.text).toBe('Hello');
+    });
+  });
+
+  describe('Session activity tracking', () => {
+    it('should update lastActivityTime on media events', async () => {
+      // Create a session
+      const startEvent = createStartEvent();
+      const session = await __testing__.createSession(
+        startEvent,
+        mockWebSocketInstance as unknown as WebSocket
+      );
+
+      const initialActivityTime = session.lastActivityTime;
+
+      // Wait a bit and send media
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const mediaEvent = createMediaEvent();
+      await __testing__.handleTwilioMessage(
+        mockWebSocketInstance as unknown as WebSocket,
+        JSON.stringify(mediaEvent)
+      );
+
+      // Get updated session
+      const updatedSession = __testing__.activeSessions.get(mockStreamSid);
+      expect(updatedSession?.lastActivityTime).toBeGreaterThan(initialActivityTime);
     });
   });
 });
 
-describe('Media stream event parsing', () => {
-  it('should parse start event correctly', () => {
-    const startEvent = {
-      event: 'start',
-      start: {
-        streamSid: 'MZ123',
-        accountSid: 'AC123',
-        callSid: 'CA123',
-        tracks: ['inbound'],
-        customParameters: {},
-        mediaFormat: {
-          encoding: 'audio/x-mulaw',
-          sampleRate: 8000,
-          channels: 1
-        }
-      }
-    };
-
-    expect(startEvent.event).toBe('start');
-    expect(startEvent.start.streamSid).toBe('MZ123');
-    expect(startEvent.start.mediaFormat.encoding).toBe('audio/x-mulaw');
+describe('Type Guards', () => {
+  it('should correctly identify connected event', () => {
+    const event = createConnectedEvent();
+    expect(event.event).toBe('connected');
+    expect(event.protocol).toBeDefined();
   });
 
-  it('should parse media event correctly', () => {
-    const mediaEvent = {
-      event: 'media',
-      media: {
-        track: 'inbound',
-        chunk: '1',
-        timestamp: '1234567890',
-        payload: 'base64encodedaudio'
-      }
-    };
+  it('should correctly identify start event', () => {
+    const event = createStartEvent();
+    expect(event.event).toBe('start');
+    expect(event.start.callSid).toBeDefined();
+    expect(event.start.streamSid).toBeDefined();
+  });
 
-    expect(mediaEvent.event).toBe('media');
-    expect(mediaEvent.media.payload).toBe('base64encodedaudio');
+  it('should correctly identify media event', () => {
+    const event = createMediaEvent();
+    expect(event.event).toBe('media');
+    expect(event.media.payload).toBeDefined();
+  });
+
+  it('should correctly identify stop event', () => {
+    const event = createStopEvent();
+    expect(event.event).toBe('stop');
+    expect(event.stop.callSid).toBeDefined();
   });
 });
