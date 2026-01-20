@@ -161,105 +161,83 @@ Implemented the Twilio Recording Complete Webhook Handler for ScamScrammer. This
 
 ---
 
-## Task: Create WebSocket Voice Stream Handler
+## Task: Create Calls REST API Endpoints
 
 **Status:** Completed
 **Date:** 2026-01-19
 
 ### What was done:
 
-1. **Installed required dependencies**
-   - Added `openai` - OpenAI SDK for Realtime API integration
-   - Added `twilio` - Twilio SDK for phone call handling and TwiML generation
-   - Added `ws` and `@types/ws` - WebSocket library for Node.js
+1. **Created GET /api/calls endpoint** (`src/app/api/calls/route.ts`)
+   - Lists calls with pagination (default: 20 per page, max: 100)
+   - Filtering by:
+     - `status` - filter by CallStatus enum (RINGING, IN_PROGRESS, COMPLETED, FAILED, NO_ANSWER)
+     - `startDate` - filter calls created on or after this date
+     - `endDate` - filter calls created on or before this date
+   - Sorting by:
+     - `sortBy` - field to sort by (createdAt, duration, rating)
+     - `sortOrder` - direction (asc or desc, default: desc)
+   - Returns paginated response with:
+     - `calls` - array of CallListItem objects
+     - `pagination` - metadata (total, page, limit, totalPages, hasNext, hasPrev)
+   - Includes segment count for each call
+   - Validates all query parameters with appropriate error messages
 
-2. **Created Earl Pemberton Persona Configuration**
-   - Created `src/lib/persona.ts` with comprehensive AI persona:
-     - Earl is an 81-year-old retired refrigerator repairman from Tulsa, OK
-     - Character background, personality traits, and behaviors
-     - 8 tangent topics (General Patton parakeet, Elvis's fridge, trick knee, hummingbirds, etc.)
-     - 24+ mishearing mappings for common scam terms (credit card → bread cart)
-     - 16 signature phrases ("Well I'll be dipped!", etc.)
-     - Helper functions: `getSystemPrompt()`, `getRandomTangent()`, `getMishearing()`, `getRandomPhrase()`, `getGreeting()`
-     - Voice configuration for OpenAI Realtime API
+2. **Created GET /api/calls/[id] endpoint** (`src/app/api/calls/[id]/route.ts`)
+   - Retrieves single call with all segments
+   - Segments ordered by timestamp (ascending)
+   - Returns 404 if call not found
+   - Returns full CallResponse including all segments
 
-3. **Created OpenAI Realtime API Client**
-   - Created `src/lib/openai.ts` with full Realtime API integration:
-     - WebSocket connection to `wss://api.openai.com/v1/realtime`
-     - Session configuration with Earl persona system prompt
-     - Audio format: g711_ulaw (μ-law) for Twilio compatibility
-     - Voice Activity Detection (VAD) enabled for natural conversation
-     - Event handlers for audio, transcripts, errors, and lifecycle events
-     - Methods: `connect()`, `sendAudio()`, `commitAudio()`, `clearAudioBuffer()`, `sendText()`, `cancelResponse()`, `disconnect()`
-     - EventEmitter pattern for handling incoming events
+3. **Created PATCH /api/calls/[id] endpoint**
+   - Updates call metadata (rating, notes, tags)
+   - Validates:
+     - `rating` - must be integer between 1-5
+     - `notes` - must be string or null
+     - `tags` - must be array of strings
+   - Returns validation errors with details
+   - Returns 404 if call not found
+   - Returns 400 if no valid fields provided
 
-4. **Created Twilio Client Wrapper**
-   - Created `src/lib/twilio.ts` with Twilio integration utilities:
-     - TwiML generation for media streams: `generateStreamTwiML()`
-     - TwiML helpers: `generateSayTwiML()`, `generateHangupTwiML()`, `generateRejectTwiML()`
-     - Signature validation: `validateSignature()`, `validateRequestSignature()`
-     - API methods: `getCallDetails()`, `getRecording()`
-     - Static utilities:
-       - `formatPhoneNumber()` - E.164 formatting
-       - `parseStreamMessage()` - Parse Twilio media stream events
-       - `createMediaMessage()` - Create audio response messages
-       - `createMarkMessage()` - Create synchronization marks
-       - `createClearMessage()` - Create buffer clear messages
-     - TypeScript interfaces for all Twilio stream event types
+4. **Created DELETE /api/calls/[id] endpoint**
+   - Deletes call and associated segments (via Prisma cascade)
+   - Returns 204 No Content on success
+   - Returns 404 if call not found
+   - Includes TODO for S3 recording cleanup
 
-5. **Created WebSocket Voice Stream Handler**
-   - Created `src/app/api/voice/stream/route.ts` with:
-     - GET endpoint for WebSocket upgrade requests (returns 426/501 appropriately)
-     - POST endpoint for health check
-     - `VoiceStreamHandler` class for WebSocket connection lifecycle:
-       - Handles Twilio media stream events (connected, start, media, stop, mark)
-       - Creates OpenAI Realtime connection on stream start
-       - Bidirectional audio bridging (Twilio ↔ OpenAI)
-       - Saves conversation segments to database
-       - Tracks call duration and updates call status
-       - Clean shutdown and resource cleanup
-     - Active connection management with `Map<streamSid, StreamConnection>`
-     - Helper functions: `getActiveConnectionCount()`, `getActiveConnection()`
-     - Documentation for custom server integration with ws library
+5. **Created tsconfig.json**
+   - Added missing TypeScript configuration file
+   - Configured path aliases (`@/*` -> `./src/*`)
+   - Required for Jest tests to resolve imports
 
-6. **Created comprehensive tests**
-   - `src/lib/__tests__/persona.test.ts` - 28 tests for persona configuration
-   - `src/lib/__tests__/openai.test.ts` - 16 tests for OpenAI client
-   - `src/lib/__tests__/twilio.test.ts` - 19 tests for Twilio client
-   - `src/app/api/voice/stream/__tests__/route.test.ts` - 14 tests for voice stream handler
-   - All 81 tests pass (including existing stats tests)
+6. **Created comprehensive test suites**
+   - `src/app/api/calls/__tests__/route.test.ts` (15 tests)
+     - Pagination tests (default, custom, limits)
+     - Filtering tests (status, date range)
+     - Sorting tests (by field, by order)
+     - Validation error tests (invalid status, dates, sort params)
+     - Empty results handling
+     - Database error handling (500 response)
+   - `src/app/api/calls/[id]/__tests__/route.test.ts` (20 tests)
+     - GET: Returns call with segments, 404, 500
+     - PATCH: Update rating, notes, tags (individual and combined)
+     - PATCH: Validation errors (rating range, non-integer, invalid tags)
+     - PATCH: Invalid JSON body, no valid fields
+     - DELETE: Success (204), 404, 500
+   - All 35 tests pass
 
-### Architecture:
+### Files created:
+- `scamscrammer/src/app/api/calls/route.ts` - Calls list endpoint (GET)
+- `scamscrammer/src/app/api/calls/[id]/route.ts` - Individual call endpoint (GET, PATCH, DELETE)
+- `scamscrammer/src/app/api/calls/__tests__/route.test.ts` - List endpoint tests
+- `scamscrammer/src/app/api/calls/[id]/__tests__/route.test.ts` - Individual call tests
+- `scamscrammer/tsconfig.json` - TypeScript configuration
 
-```
-Incoming Call (Twilio)
-        ↓
-/api/twilio/incoming (future)
-        ↓
-Returns TwiML with <Stream> to /api/voice/stream
-        ↓
-WebSocket Connection Established
-        ↓
-VoiceStreamHandler
-    ├── Connects to OpenAI Realtime API
-    ├── Receives audio from Twilio
-    ├── Sends to OpenAI (Earl processes)
-    ├── Receives Earl's response audio
-    ├── Sends back to Twilio
-    └── Saves transcripts to database
-        ↓
-Call Ends → Duration updated in DB
-```
+### API Endpoints Summary:
 
-### Files created/modified:
-- `scamscrammer/src/lib/persona.ts` - Earl Pemberton AI persona configuration
-- `scamscrammer/src/lib/openai.ts` - OpenAI Realtime API WebSocket client
-- `scamscrammer/src/lib/twilio.ts` - Twilio client wrapper with TwiML generation
-- `scamscrammer/src/app/api/voice/stream/route.ts` - WebSocket voice stream handler
-- `scamscrammer/src/lib/__tests__/persona.test.ts` - Persona tests
-- `scamscrammer/src/lib/__tests__/openai.test.ts` - OpenAI client tests
-- `scamscrammer/src/lib/__tests__/twilio.test.ts` - Twilio client tests
-- `scamscrammer/src/app/api/voice/stream/__tests__/route.test.ts` - Voice stream tests
-- `scamscrammer/src/app/api/stats/route.ts` - Updated imports to relative paths
-- `scamscrammer/src/app/api/stats/__tests__/route.test.ts` - Updated imports to relative paths
-- `scamscrammer/package.json` - Added openai, twilio, ws dependencies
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | /api/calls | List calls with pagination, filtering, sorting |
+| GET | /api/calls/[id] | Get single call with all segments |
+| PATCH | /api/calls/[id] | Update rating, notes, tags |
+| DELETE | /api/calls/[id] | Delete call and segments |
