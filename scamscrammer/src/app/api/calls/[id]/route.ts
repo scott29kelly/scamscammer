@@ -1,9 +1,8 @@
 /**
- * Single Call API Endpoint
+ * Call Detail API Endpoint
  *
- * GET /api/calls/[id] - Get a single call with segments
- * PATCH /api/calls/[id] - Update call rating, notes, or tags
- * DELETE /api/calls/[id] - Delete a call and its segments
+ * GET /api/calls/[id] - Returns a single call with all segments
+ * PATCH /api/calls/[id] - Updates a call's rating, notes, or tags
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -16,10 +15,10 @@ interface RouteParams {
 
 /**
  * GET /api/calls/[id]
- * Fetch a single call with all its segments
+ * Fetch a single call by ID with all its segments
  */
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: RouteParams
 ): Promise<NextResponse<CallResponse | ApiErrorResponse>> {
   try {
@@ -77,9 +76,15 @@ export async function GET(
   }
 }
 
+interface UpdateCallBody {
+  rating?: number;
+  notes?: string;
+  tags?: string[];
+}
+
 /**
  * PATCH /api/calls/[id]
- * Update call rating, notes, or tags
+ * Update a call's rating, notes, or tags
  */
 export async function PATCH(
   request: NextRequest,
@@ -87,9 +92,29 @@ export async function PATCH(
 ): Promise<NextResponse<CallResponse | ApiErrorResponse>> {
   try {
     const { id } = await params;
-    const body = await request.json();
+    const body: UpdateCallBody = await request.json();
 
-    // Validate the call exists
+    // Validate rating if provided
+    if (body.rating !== undefined) {
+      if (!Number.isInteger(body.rating) || body.rating < 1 || body.rating > 5) {
+        return NextResponse.json(
+          { error: 'Rating must be an integer between 1 and 5' },
+          { status: 400 }
+        );
+      }
+    }
+
+    // Validate tags if provided
+    if (body.tags !== undefined) {
+      if (!Array.isArray(body.tags) || !body.tags.every((tag) => typeof tag === 'string')) {
+        return NextResponse.json(
+          { error: 'Tags must be an array of strings' },
+          { status: 400 }
+        );
+      }
+    }
+
+    // Check if call exists
     const existingCall = await prisma.call.findUnique({
       where: { id },
     });
@@ -101,55 +126,14 @@ export async function PATCH(
       );
     }
 
-    // Build update data - only include fields that are present in the request
-    const updateData: {
-      rating?: number | null;
-      notes?: string | null;
-      tags?: string[];
-    } = {};
-
-    if ('rating' in body) {
-      // Validate rating is 1-5 or null
-      if (body.rating !== null && (typeof body.rating !== 'number' || body.rating < 1 || body.rating > 5)) {
-        return NextResponse.json(
-          {
-            error: 'Invalid rating',
-            details: { rating: 'Rating must be a number between 1 and 5, or null' },
-          },
-          { status: 400 }
-        );
-      }
-      updateData.rating = body.rating;
-    }
-
-    if ('notes' in body) {
-      if (body.notes !== null && typeof body.notes !== 'string') {
-        return NextResponse.json(
-          {
-            error: 'Invalid notes',
-            details: { notes: 'Notes must be a string or null' },
-          },
-          { status: 400 }
-        );
-      }
-      updateData.notes = body.notes;
-    }
-
-    if ('tags' in body) {
-      if (!Array.isArray(body.tags) || !body.tags.every((tag: unknown) => typeof tag === 'string')) {
-        return NextResponse.json(
-          {
-            error: 'Invalid tags',
-            details: { tags: 'Tags must be an array of strings' },
-          },
-          { status: 400 }
-        );
-      }
-      updateData.tags = body.tags;
-    }
+    // Build update data
+    const updateData: { rating?: number; notes?: string; tags?: string[] } = {};
+    if (body.rating !== undefined) updateData.rating = body.rating;
+    if (body.notes !== undefined) updateData.notes = body.notes;
+    if (body.tags !== undefined) updateData.tags = body.tags;
 
     // Update the call
-    const updatedCall = await prisma.call.update({
+    const call = await prisma.call.update({
       where: { id },
       data: updateData,
       include: {
@@ -162,20 +146,20 @@ export async function PATCH(
     });
 
     const response: CallResponse = {
-      id: updatedCall.id,
-      twilioSid: updatedCall.twilioSid,
-      fromNumber: updatedCall.fromNumber,
-      toNumber: updatedCall.toNumber,
-      status: updatedCall.status,
-      duration: updatedCall.duration,
-      recordingUrl: updatedCall.recordingUrl,
-      transcriptUrl: updatedCall.transcriptUrl,
-      rating: updatedCall.rating,
-      notes: updatedCall.notes,
-      tags: updatedCall.tags,
-      createdAt: updatedCall.createdAt,
-      updatedAt: updatedCall.updatedAt,
-      segments: updatedCall.segments.map((segment) => ({
+      id: call.id,
+      twilioSid: call.twilioSid,
+      fromNumber: call.fromNumber,
+      toNumber: call.toNumber,
+      status: call.status,
+      duration: call.duration,
+      recordingUrl: call.recordingUrl,
+      transcriptUrl: call.transcriptUrl,
+      rating: call.rating,
+      notes: call.notes,
+      tags: call.tags,
+      createdAt: call.createdAt,
+      updatedAt: call.updatedAt,
+      segments: call.segments.map((segment) => ({
         id: segment.id,
         callId: segment.callId,
         speaker: segment.speaker,
@@ -190,44 +174,6 @@ export async function PATCH(
     console.error('Error updating call:', error);
     return NextResponse.json(
       { error: 'Failed to update call' },
-      { status: 500 }
-    );
-  }
-}
-
-/**
- * DELETE /api/calls/[id]
- * Delete a call and all its segments (cascade delete)
- */
-export async function DELETE(
-  _request: NextRequest,
-  { params }: RouteParams
-): Promise<NextResponse<{ success: boolean } | ApiErrorResponse>> {
-  try {
-    const { id } = await params;
-
-    // Validate the call exists
-    const existingCall = await prisma.call.findUnique({
-      where: { id },
-    });
-
-    if (!existingCall) {
-      return NextResponse.json(
-        { error: 'Call not found' },
-        { status: 404 }
-      );
-    }
-
-    // Delete the call (segments will cascade delete due to schema)
-    await prisma.call.delete({
-      where: { id },
-    });
-
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error('Error deleting call:', error);
-    return NextResponse.json(
-      { error: 'Failed to delete call' },
       { status: 500 }
     );
   }
