@@ -1,72 +1,51 @@
-/**
- * Next.js Middleware for Route Protection
- *
- * Protects dashboard routes (/calls/*, /api/calls/*) while
- * keeping public routes and Twilio webhooks accessible.
- */
+import { auth } from '@/lib/auth';
+import { NextResponse } from 'next/server';
 
-import { NextRequest, NextResponse } from 'next/server';
-import {
-  isAuthenticatedRequest,
-  isProtectedRoute,
-  isLoginRoute,
-  isApiRoute,
-} from '@/lib/auth';
+export default auth((req) => {
+  const { pathname } = req.nextUrl;
 
-export function middleware(request: NextRequest) {
-  const { pathname } = request.nextUrl;
+  // Check if the route requires authentication
+  const isProtectedRoute =
+    pathname.startsWith('/calls') ||
+    pathname.startsWith('/api/calls') ||
+    pathname.startsWith('/api/stats');
 
-  // Check if this is a protected route
-  if (!isProtectedRoute(pathname)) {
-    // Not a protected route, allow access
+  // Twilio webhook routes should NOT be protected (they use signature validation)
+  const isTwilioRoute = pathname.startsWith('/api/twilio');
+
+  // Auth routes should not be protected
+  const isAuthRoute =
+    pathname.startsWith('/api/auth') ||
+    pathname === '/login' ||
+    pathname === '/register';
+
+  // Allow public routes
+  if (isTwilioRoute || isAuthRoute || !isProtectedRoute) {
     return NextResponse.next();
   }
 
-  // Check if user is authenticated
-  const authenticated = isAuthenticatedRequest(request);
+  // Check authentication for protected routes
+  if (!req.auth) {
+    // For API routes, return 401
+    if (pathname.startsWith('/api/')) {
+      return NextResponse.json(
+        { error: 'Authentication required' },
+        { status: 401 }
+      );
+    }
 
-  if (authenticated) {
-    // User is authenticated, allow access
-    return NextResponse.next();
+    // For page routes, redirect to login
+    const loginUrl = new URL('/login', req.url);
+    loginUrl.searchParams.set('callbackUrl', pathname);
+    return NextResponse.redirect(loginUrl);
   }
 
-  // User is not authenticated
-  if (isApiRoute(pathname)) {
-    // For API routes, return 401 JSON response
-    return NextResponse.json(
-      { error: 'Authentication required' },
-      { status: 401 }
-    );
-  }
+  return NextResponse.next();
+});
 
-  // For page routes, redirect to login
-  const loginUrl = new URL('/login', request.url);
-  loginUrl.searchParams.set('redirect', pathname);
-  return NextResponse.redirect(loginUrl);
-}
-
-// Middleware configuration
 export const config = {
   matcher: [
-    /*
-     * Match all request paths except:
-     * - _next/static (static files)
-     * - _next/image (image optimization files)
-     * - favicon.ico (favicon file)
-     * - public folder files
-     *
-     * Protected routes are:
-     * - /calls and /calls/*
-     * - /api/calls and /api/calls/*
-     *
-     * NOT protected (use Twilio signature validation instead):
-     * - /api/twilio/*
-     * - /api/voice/*
-     * - /api/stats
-     * - /api/health
-     * - /api/auth/*
-     */
-    '/calls/:path*',
-    '/api/calls/:path*',
+    // Match all routes except static files and Next.js internals
+    '/((?!_next/static|_next/image|favicon.ico).*)',
   ],
 };

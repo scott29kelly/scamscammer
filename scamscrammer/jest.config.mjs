@@ -7,6 +7,8 @@ const createJestConfig = nextJest({
 const customJestConfig = {
   setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],
   testEnvironment: 'node',
+  roots: ['<rootDir>/src'],
+  modulePaths: ['<rootDir>/src'],
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1',
   },
@@ -19,7 +21,10 @@ const customJestConfig = {
         moduleResolution: 'node',
         esModuleInterop: true,
         allowSyntheticDefaultImports: true,
-        jsx: 'react-jsx',
+        baseUrl: '.',
+        paths: {
+          '@/*': ['src/*'],
+        },
       },
     }],
   },

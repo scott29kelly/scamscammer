@@ -8,19 +8,23 @@
     "start": "next start",
     "lint": "eslint",
     "test": "jest",
-    "test:watch": "jest --watch"
+    "test:watch": "jest --watch",
+    "db:seed": "npx ts-node --compiler-options '{\"module\":\"CommonJS\"}' prisma/seed.ts"
   },
   "dependencies": {
     "@prisma/client": "^7.2.0",
+    "bcryptjs": "^3.0.3",
     "dotenv": "^17.2.3",
     "next": "16.1.3",
+    "next-auth": "^5.0.0-beta.30",
+    "pg": "^8.17.1",
     "react": "19.2.3",
     "react-dom": "19.2.3"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@testing-library/jest-dom": "^6.9.1",
-    "@testing-library/react": "^16.3.2",
+    "@types/bcryptjs": "^2.4.6",
     "@types/jest": "^30.0.0",
     "@types/node": "^20",
     "@types/react": "^19",
