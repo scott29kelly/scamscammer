@@ -136,3 +136,73 @@
 - `scamscrammer/jest.config.mjs` - Jest configuration
 - `scamscrammer/jest.setup.js` - Jest setup
 - `scamscrammer/package.json` - Added test scripts and dependencies
+
+---
+
+## Task: Implement Storage Service for Recordings
+
+**Status:** Completed
+**Date:** 2026-01-19
+
+### What was done:
+
+1. **Installed AWS SDK Dependencies**
+   - Added `@aws-sdk/client-s3` for S3 operations
+   - Added `@aws-sdk/s3-request-presigner` for generating signed URLs
+
+2. **Created Storage Service Module**
+   - Created `src/lib/storage.ts` with complete S3-based storage implementation
+   - Follows singleton pattern consistent with existing db.ts
+
+3. **StorageClient Class Methods:**
+   - `uploadRecording(callId, audioBuffer, contentType)` - Upload recordings to S3
+   - `getRecordingUrl(callId, expiresIn)` - Generate signed URLs for secure download
+   - `deleteRecording(callId)` - Remove recordings from storage
+   - `listRecordings(options)` - List all recordings with pagination support
+   - `generateStorageKey(callId, extension)` - Consistent date-based key naming
+   - `recordingExists(callId)` - Check if recording exists
+   - `getRecordingMetadata(callId)` - Get recording metadata without downloading
+   - `extractCallIdFromKey(key)` - Extract call ID from S3 key
+
+4. **Key Features:**
+   - Date-based S3 key partitioning (`recordings/YYYY/MM/DD/callId.ext`)
+   - Support for multiple audio formats (wav, mp3, ogg, webm, flac)
+   - Presigned URL generation with configurable expiration
+   - Custom StorageError class with error codes
+   - IAM role support (credentials optional)
+   - Pagination support for listing recordings
+
+5. **TypeScript Interfaces Created:**
+   - `StorageConfig` - Configuration options
+   - `ListRecordingsOptions` - Pagination options for listing
+   - `RecordingMetadata` - Recording metadata structure
+   - `ListRecordingsResponse` - Paginated list response
+   - `UploadResult` - Upload operation result
+
+6. **Environment Variables Required:**
+   - `AWS_REGION` - AWS region (required)
+   - `AWS_BUCKET_NAME` - S3 bucket name (required)
+   - `AWS_ACCESS_KEY_ID` - AWS access key (optional, for non-IAM deployments)
+   - `AWS_SECRET_ACCESS_KEY` - AWS secret key (optional, for non-IAM deployments)
+
+7. **Convenience Export:**
+   - `storage` default export with all methods pre-bound to singleton client
+   - `getStorageClient()` function to get/create singleton instance
+
+8. **Comprehensive Test Suite:**
+   - Created `src/lib/__tests__/storage.test.ts`
+   - 38 tests covering all methods and error cases
+   - Mock-based testing for S3 operations
+   - Tests for:
+     - Constructor with/without credentials
+     - Environment variable validation
+     - All CRUD operations (upload, get URL, delete, list)
+     - Error handling for all failure scenarios
+     - Pagination and continuation tokens
+     - Metadata retrieval
+     - Singleton pattern
+
+### Files created/modified:
+- `scamscrammer/src/lib/storage.ts` - Storage service module (new)
+- `scamscrammer/src/lib/__tests__/storage.test.ts` - Storage tests (new)
+- `scamscrammer/package.json` - Added AWS SDK dependencies
