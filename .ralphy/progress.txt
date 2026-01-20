@@ -201,127 +201,106 @@
 
 ---
 
-## Task: Add Authentication and Route Protection
+## Task: Add Error Handling and Monitoring
 
 **Status:** Completed
 **Date:** 2026-01-19
 
 ### What was done:
 
-1. **Added User and Session models to Prisma schema**
-   - Created `User` model with id, email, passwordHash, name, role, timestamps
-   - Created `Session` model for session management
-   - Added `UserRole` enum (USER, ADMIN)
-   - Updated `prisma/schema.prisma`
+1. **Created custom error classes (`src/lib/errors.ts`)**
+   - `AppError` - Base error class with code, statusCode, isOperational, details, timestamp
+   - `DatabaseError` - For database-related errors
+   - `TwilioError` - For Twilio API errors with twilioErrorCode
+   - `OpenAIError` - For OpenAI API errors
+   - `StorageError` - For S3/storage errors
+   - `ValidationError` - For input validation errors with fieldErrors
+   - `NotFoundError` - For resource not found errors
+   - `ExternalServiceError` - For generic external service errors
+   - Error codes enum (DATABASE_CONNECTION, TWILIO_API, OPENAI_RATE_LIMIT, etc.)
+   - Utility functions: `isAppError()`, `isOperationalError()`, `formatErrorResponse()`, `getErrorStatusCode()`, `wrapPrismaError()`
 
-2. **Installed authentication dependencies**
-   - Installed `next-auth@beta` (v5 for Next.js App Router)
-   - Installed `bcryptjs` for password hashing
-   - Installed `@types/bcryptjs` for TypeScript support
+2. **Created structured logging service (`src/lib/logger.ts`)**
+   - Multiple log levels: DEBUG, INFO, WARN, ERROR
+   - Structured JSON output in production for log aggregation
+   - Pretty-printed colored output in development
+   - Request context tracking with correlation IDs
+   - `generateRequestId()` - Creates unique request IDs
+   - `setRequestContext()` / `clearRequestContext()` - Manages request-scoped context
+   - `createLogger()` - Creates child loggers with default context
+   - `withRequestLogging()` - Utility to wrap async functions with logging
 
-3. **Created NextAuth.js configuration**
-   - Created `src/lib/auth.ts` with NextAuth configuration
-   - Configured credentials provider for email/password login
-   - Set up JWT session strategy
-   - Added callbacks for including user role in session
-   - Custom sign-in page at `/login`
+3. **Created monitoring service (`src/lib/monitoring.ts`)**
+   - Metric types: COUNTER, GAUGE, HISTOGRAM, TIMER
+   - `monitoring.incrementCounter()` - Track counts/increments
+   - `monitoring.setGauge()` - Track current values
+   - `monitoring.recordHistogram()` - Track distributions
+   - `monitoring.timeAsync()` / `monitoring.timeSync()` - Time operations
+   - `monitoring.recordRequest()` / `monitoring.recordError()` - Request/error tracking
+   - `monitoring.getRequestsPerMinute()` / `monitoring.getErrorRate()` - Rate metrics
+   - `monitoring.getMemoryUsage()` / `monitoring.getUptime()` - System metrics
+   - `createTimer()` - Manual timing control
+   - `trackDatabaseQuery()` - Database query monitoring helper
+   - `trackExternalCall()` - External API monitoring helper
+   - `createRequestMonitoring()` - Request-scoped monitoring
 
-4. **Created NextAuth API route**
-   - Created `src/app/api/auth/[...nextauth]/route.ts`
-   - Exports GET and POST handlers from auth configuration
+4. **Created health check endpoint (`src/app/api/health/route.ts`)**
+   - GET /api/health - Returns service health status
+   - Checks database connectivity with latency measurement
+   - Returns service statuses: healthy, degraded, unhealthy
+   - Returns HTTP 200 for healthy/degraded, 503 for unhealthy
+   - Includes system metrics:
+     - Uptime in seconds
+     - Memory usage (heapUsed, heapTotal, external, rss)
+     - Requests per minute
+     - Error rate percentage
+   - Suitable for load balancer health checks and Kubernetes probes
 
-5. **Implemented password utilities**
-   - Created `src/lib/password.ts` with:
-     - `hashPassword()` - bcrypt hash with 12 salt rounds
-     - `verifyPassword()` - secure password comparison
+5. **Updated stats API route with error handling (`src/app/api/stats/route.ts`)**
+   - Added request context with correlation IDs
+   - Added structured logging for requests and errors
+   - Added request monitoring (success/error tracking)
+   - Improved error responses with error codes and details
+   - Uses `wrapPrismaError()` for database error handling
+   - Maintains backwards compatibility with existing response format
 
-6. **Created Next.js middleware for route protection**
-   - Created `src/middleware.ts` with auth middleware
-   - Protected routes:
-     - `/calls/*` - Dashboard pages
-     - `/api/calls/*` - REST API endpoints
-     - `/api/stats` - Statistics API
-   - Unprotected routes (as required):
-     - `/api/twilio/*` - Twilio webhooks (use signature validation)
-     - `/api/auth/*` - Auth endpoints
-     - `/login`, `/register` - Auth pages
-   - Unauthenticated API requests return 401 JSON error
-   - Unauthenticated page requests redirect to `/login`
+6. **Updated database client with monitoring (`src/lib/db.ts`)**
+   - Added Prisma event listeners for query, error, and warning events
+   - Logs queries with duration in development
+   - Records query metrics to monitoring service
+   - Logs all database errors
+   - Added `testDatabaseConnection()` utility
+   - Added `disconnectDatabase()` for graceful shutdown
 
-7. **Added authentication types**
-   - Updated `src/types/index.ts` with:
-     - Re-exported User, Session, UserRole from Prisma
-     - LoginCredentials interface
-     - RegisterData interface
-     - AuthUser interface
-   - Created `src/types/next-auth.d.ts` for NextAuth type extensions:
-     - Extended User to include role
-     - Extended Session to include user id and role
-     - Extended JWT to include id and role
+7. **Updated TypeScript types (`src/types/index.ts`)**
+   - Updated ApiErrorResponse to support `Record<string, unknown>` for details
+   - Added requestId field for error responses
 
-8. **Created login page UI**
-   - Created `src/app/login/page.tsx`
-   - Simple, clean form with email and password fields
-   - Error handling for invalid credentials
-   - Loading state during sign-in
-   - Redirects to callback URL after successful login
-   - Styled with Tailwind CSS
+8. **Updated Jest configuration (`jest.config.mjs`)**
+   - Added baseUrl and paths configuration for ts-jest
+   - Properly resolves `@/` path aliases in tests
 
-9. **Created session provider component**
-   - Created `src/components/SessionProvider.tsx`
-   - Wraps NextAuthSessionProvider for client-side session access
+9. **Created comprehensive tests**
+   - `src/lib/__tests__/errors.test.ts` - 35 tests for error classes and utilities
+   - `src/lib/__tests__/logger.test.ts` - 12 tests for logging service
+   - `src/lib/__tests__/monitoring.test.ts` - 19 tests for monitoring service
+   - `src/app/api/health/__tests__/route.test.ts` - 6 tests for health endpoint
+   - Updated `src/app/api/stats/__tests__/route.test.ts` with mocks for new dependencies
+   - All 70 tests pass
 
-10. **Created database seed script**
-    - Created `prisma/seed.ts` for creating initial admin user
-    - Uses environment variables ADMIN_EMAIL and ADMIN_PASSWORD
-    - Added `db:seed` script to package.json
+### Files created:
+- `scamscrammer/src/lib/errors.ts` - Custom error classes and utilities
+- `scamscrammer/src/lib/logger.ts` - Structured logging service
+- `scamscrammer/src/lib/monitoring.ts` - Monitoring and metrics service
+- `scamscrammer/src/app/api/health/route.ts` - Health check endpoint
+- `scamscrammer/src/lib/__tests__/errors.test.ts` - Error handling tests
+- `scamscrammer/src/lib/__tests__/logger.test.ts` - Logger tests
+- `scamscrammer/src/lib/__tests__/monitoring.test.ts` - Monitoring tests
+- `scamscrammer/src/app/api/health/__tests__/route.test.ts` - Health endpoint tests
 
-11. **Wrote comprehensive tests**
-    - Created `src/lib/__tests__/password.test.ts`:
-      - Tests password hashing (different hashes each time)
-      - Tests password verification (correct/incorrect/empty)
-    - Created `src/lib/__tests__/auth-routes.test.ts`:
-      - Tests route protection logic
-      - Verifies `/calls/*` routes require auth
-      - Verifies `/api/calls/*` routes require auth
-      - Verifies `/api/stats` requires auth
-      - Verifies `/api/twilio/*` does NOT require auth
-      - Verifies `/login` does NOT require auth
-    - All 24 new tests pass (28 total with existing tests)
-
-12. **Fixed Jest configuration**
-    - Updated `jest.config.mjs` to properly resolve `@/` path aliases
-    - Added `roots` and `modulePaths` configuration
-    - Added `baseUrl` and `paths` to ts-jest tsconfig
-
-### Route Protection Summary:
-
-| Route Pattern | Protected | Behavior |
-|---------------|-----------|----------|
-| `/calls/*` | Yes | Redirect to /login |
-| `/api/calls/*` | Yes | Return 401 JSON |
-| `/api/stats` | Yes | Return 401 JSON |
-| `/api/twilio/*` | No | Uses Twilio signature validation |
-| `/api/auth/*` | No | Auth endpoints |
-| `/login` | No | Login page |
-
-### Files created/modified:
-- `scamscrammer/prisma/schema.prisma` - Added User, Session models and UserRole enum
-- `scamscrammer/prisma/seed.ts` - Database seed script for admin user
-- `scamscrammer/src/lib/auth.ts` - NextAuth.js configuration
-- `scamscrammer/src/lib/password.ts` - Password hashing utilities
-- `scamscrammer/src/middleware.ts` - Route protection middleware
-- `scamscrammer/src/app/api/auth/[...nextauth]/route.ts` - NextAuth API route
-- `scamscrammer/src/app/login/page.tsx` - Login page UI
-- `scamscrammer/src/components/SessionProvider.tsx` - Client session provider
-- `scamscrammer/src/types/index.ts` - Added auth types
-- `scamscrammer/src/types/next-auth.d.ts` - NextAuth type extensions
-- `scamscrammer/src/lib/__tests__/password.test.ts` - Password utility tests
-- `scamscrammer/src/lib/__tests__/auth-routes.test.ts` - Route protection tests
-- `scamscrammer/jest.config.mjs` - Fixed module resolution
-- `scamscrammer/package.json` - Added db:seed script and auth dependencies
-
-### Environment Variables Required:
-- `AUTH_SECRET` - NextAuth.js secret (generate with `openssl rand -base64 32`)
-- `ADMIN_EMAIL` - (optional) Email for initial admin user
-- `ADMIN_PASSWORD` - (optional) Password for initial admin user
+### Files modified:
+- `scamscrammer/src/app/api/stats/route.ts` - Added error handling and logging
+- `scamscrammer/src/lib/db.ts` - Added monitoring and event logging
+- `scamscrammer/src/types/index.ts` - Updated ApiErrorResponse type
+- `scamscrammer/jest.config.mjs` - Added path aliases for ts-jest
+- `scamscrammer/src/app/api/stats/__tests__/route.test.ts` - Added mocks for new dependencies

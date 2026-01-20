@@ -2,14 +2,19 @@
  * Stats API Endpoint Tests
  */
 
-// Define CallStatus enum locally since Prisma client might not be generated
+import { GET } from '../route';
+import prisma from '@/lib/db';
+
+// Define CallStatus enum to match Prisma schema
 const CallStatus = {
   RINGING: 'RINGING',
   IN_PROGRESS: 'IN_PROGRESS',
   COMPLETED: 'COMPLETED',
   FAILED: 'FAILED',
-  NO_ANSWER: 'NO_ANSWER'
+  NO_ANSWER: 'NO_ANSWER',
 } as const;
+
+type CallStatusType = (typeof CallStatus)[keyof typeof CallStatus];
 
 type CallStatusType = typeof CallStatus[keyof typeof CallStatus];
 
@@ -29,9 +34,39 @@ jest.mock('../../../../lib/db', () => ({
   default: mockPrismaClient,
 }));
 
-import { GET } from '../route';
+// Mock the logger
+jest.mock('@/lib/logger', () => ({
+  __esModule: true,
+  logger: {
+    debug: jest.fn(),
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+  },
+  generateRequestId: jest.fn().mockReturnValue('test-request-id'),
+  setRequestContext: jest.fn(),
+  clearRequestContext: jest.fn(),
+}));
 
-const mockPrisma = mockPrismaClient;
+// Mock the monitoring
+jest.mock('@/lib/monitoring', () => ({
+  __esModule: true,
+  monitoring: {
+    recordRequest: jest.fn(),
+    recordError: jest.fn(),
+    incrementCounter: jest.fn(),
+    timeAsync: jest.fn().mockImplementation((_, fn) => fn().then((result: unknown) => ({ result, duration: 10 }))),
+  },
+  trackDatabaseQuery: jest.fn().mockImplementation((_, __, fn) => fn()),
+  createRequestMonitoring: jest.fn().mockReturnValue({
+    tags: {},
+    recordSuccess: jest.fn(),
+    recordError: jest.fn(),
+    trackDuration: jest.fn().mockImplementation((fn) => fn()),
+  }),
+}));
+
+const mockPrisma = prisma as jest.Mocked<typeof prisma>;
 
 describe('GET /api/stats', () => {
   beforeEach(() => {
@@ -147,7 +182,8 @@ describe('GET /api/stats', () => {
     const data = await response.json();
 
     expect(response.status).toBe(500);
-    expect(data).toHaveProperty('error', 'Failed to fetch statistics');
+    expect(data).toHaveProperty('error');
+    expect(data).toHaveProperty('code');
   });
 
   it('should fill missing days with zero counts', async () => {

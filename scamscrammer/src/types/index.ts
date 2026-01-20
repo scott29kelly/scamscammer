@@ -7,9 +7,11 @@ export { CallStatus, Speaker, UserRole } from '@prisma/client';
 /**
  * Login credentials for authentication
  */
-export interface LoginCredentials {
-  email: string;
-  password: string;
+export interface ApiErrorResponse {
+  error: string;
+  code?: string;
+  details?: Record<string, unknown>;
+  requestId?: string;
 }
 
 /**
