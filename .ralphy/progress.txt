@@ -1,191 +1,63 @@
 # Ralphy Progress Log
 
-## Task: Create Call Status Webhook Handler
+## Task: Create Recording Complete Webhook Handler
 
-**Status:** Completed
-**Date:** 2026-01-19
+### Completed: 2026-01-19
 
-### What was done:
+### Summary
+Implemented the Twilio Recording Complete Webhook Handler for ScamScrammer. This webhook handles callbacks from Twilio when call recordings are ready, fetches the recordings, uploads them to S3, and updates the database.
 
-1. **Created Twilio client module**
-   - Created `src/lib/twilio.ts` with:
-     - `validateTwilioSignature()` - HMAC-SHA1 signature validation for webhook security
-     - `getTwilioAuthToken()` - Environment variable helper
-     - `getWebhookBaseUrl()` - Webhook URL configuration helper
-     - `TwilioCallStatus` type for all possible Twilio status values
-     - Constant-time string comparison to prevent timing attacks
+### Files Created
 
-2. **Implemented Call Status Webhook Handler**
-   - Created `src/app/api/twilio/status/route.ts` with POST handler
-   - Receives and validates Twilio status callbacks
-   - Maps Twilio statuses to CallStatus enum:
-     - `queued`, `initiated`, `ringing` → RINGING
-     - `in-progress` → IN_PROGRESS
-     - `completed` → COMPLETED (with duration)
-     - `busy`, `canceled`, `failed` → FAILED
-     - `no-answer` → NO_ANSWER
-   - Validates required fields (CallSid, CallStatus)
-   - Validates Twilio signature in production
-   - Updates call record in database with new status and duration
-   - Proper error handling with typed responses
-   - Logs status transitions for debugging
+1. **`scamscrammer/src/app/api/twilio/recording/route.ts`**
+   - Main webhook handler for POST requests from Twilio
+   - Validates Twilio signatures for security
+   - Handles multiple recording statuses: completed, failed, in-progress, absent
+   - Downloads completed recordings from Twilio API
+   - Uploads recordings to S3 storage
+   - Updates call records in the database with recording URLs
+   - Implements idempotency (skips already-processed recordings)
+   - Graceful error handling (returns 200 to prevent Twilio retries)
 
-3. **Added TypeScript type definitions**
-   - Updated `src/types/index.ts` with:
-     - `TwilioCallStatus` type for webhook status values
-     - `TwilioStatusPayload` interface for webhook payload
-     - `StatusUpdateResponse` interface for handler response
+2. **`scamscrammer/src/app/api/twilio/recording/__tests__/route.test.ts`**
+   - Comprehensive test suite using Vitest
+   - Tests signature validation
+   - Tests successful recording processing flow
+   - Tests handling of failed recordings
+   - Tests edge cases (missing call, duplicate processing)
+   - Tests error handling scenarios
 
-4. **Created comprehensive tests**
-   - Created `src/app/api/twilio/status/__tests__/route.test.ts`:
-     - Tests for all Twilio status mappings (9 status types)
-     - Tests for call not found (404)
-     - Tests for missing required fields (400)
-     - Tests for invalid signature (401)
-     - Tests for database errors (500)
-     - Tests that duration only saves on completed status
-   - Created `src/lib/__tests__/twilio.test.ts`:
-     - Tests for signature validation
-     - Tests for environment variable helpers
-     - All 35 tests pass
+3. **Supporting Files (from other branches, recreated for this task)**
+   - `scamscrammer/src/lib/db.ts` - Prisma client singleton
+   - `scamscrammer/src/lib/twilio.ts` - Twilio SDK wrapper and helpers
+   - `scamscrammer/src/lib/storage.ts` - S3 storage client
+   - `scamscrammer/src/types/index.ts` - TypeScript interfaces
+   - `scamscrammer/prisma/schema.prisma` - Database schema
+   - `scamscrammer/package.json` - Dependencies
+   - `scamscrammer/tsconfig.json` - TypeScript config
+   - `scamscrammer/vitest.config.ts` - Test config
 
-5. **Created tsconfig.json**
-   - Added TypeScript configuration for Next.js project
-   - Configured path aliases (@/* → ./src/*)
+### Key Features
 
-### Files created/modified:
-- `scamscrammer/src/lib/twilio.ts` - Twilio client module with signature validation
-- `scamscrammer/src/app/api/twilio/status/route.ts` - Call status webhook handler
-- `scamscrammer/src/types/index.ts` - Added Twilio types
-- `scamscrammer/src/app/api/twilio/status/__tests__/route.test.ts` - Webhook handler tests
-- `scamscrammer/src/lib/__tests__/twilio.test.ts` - Twilio module tests
-- `scamscrammer/tsconfig.json` - TypeScript configuration
+- **Security**: Validates Twilio webhook signatures before processing
+- **Reliability**: Returns 200 status to Twilio even on errors to prevent retry loops
+- **Idempotency**: Checks if recording already processed to prevent duplicates
+- **Logging**: Comprehensive logging for debugging and monitoring
+- **Error Notes**: Records recording failures in call notes for visibility
 
----
+### Webhook Flow
 
-## Task: Create Stats API Endpoint
+1. Receive POST from Twilio with recording status
+2. Validate Twilio signature
+3. Parse recording payload
+4. If status is 'completed':
+   - Find call in database by Twilio SID
+   - Skip if already has recording URL
+   - Fetch recording details from Twilio API
+   - Download WAV audio from Twilio
+   - Upload to S3 storage
+   - Update call record with S3 URL and duration
+5. If status is 'failed':
+   - Add failure note to call record
+6. Return success response
 
-**Status:** Completed
-**Date:** 2026-01-19
-
-### What was done:
-
-1. **Set up Prisma ORM with PostgreSQL**
-   - Created `prisma/schema.prisma` with Call and CallSegment models
-   - Created `prisma.config.ts` for Prisma 7 configuration
-   - Installed `@prisma/client`, `@prisma/adapter-pg`, `pg`, and `dotenv`
-   - Generated Prisma client
-
-2. **Created database client singleton**
-   - Created `src/lib/db.ts` with Prisma client singleton pattern
-   - Configured for development hot-reload compatibility
-   - Uses `@prisma/adapter-pg` for Prisma 7 compatibility
-
-3. **Added TypeScript type definitions**
-   - Updated `src/types/index.ts` with:
-     - Re-exported Prisma types (Call, CallSegment, CallStatus, Speaker)
-     - ApiErrorResponse interface
-     - PaginationInfo interface
-     - CallListItem interface
-     - CallListResponse interface
-     - CallResponse interface
-     - DashboardStats interface
-
-4. **Implemented Stats API endpoint**
-   - Created `src/app/api/stats/route.ts` with GET handler
-   - Returns comprehensive dashboard statistics:
-     - `totalCalls` - total number of calls
-     - `totalDuration` - sum of all call durations (seconds)
-     - `averageDuration` - average call duration (rounded)
-     - `callsByStatus` - count per status (RINGING, IN_PROGRESS, COMPLETED, FAILED, NO_ANSWER)
-     - `callsByDay` - last 30 days with call counts (for charting)
-     - `topRatedCalls` - top 5 highest-rated calls
-     - `longestCalls` - top 5 longest duration calls
-   - Uses Prisma aggregations for efficiency (count, aggregate, groupBy, $queryRaw)
-   - All database queries run in parallel using Promise.all()
-   - Proper error handling with 500 response on failure
-
-5. **Set up Jest testing framework**
-   - Created `jest.config.mjs` with TypeScript support
-   - Created `jest.setup.js` for test configuration
-   - Added test and test:watch scripts to package.json
-   - Installed jest, ts-jest, @types/jest, and @testing-library/jest-dom
-
-6. **Created comprehensive tests**
-   - Created `src/app/api/stats/__tests__/route.test.ts`
-   - Tests cover:
-     - Successful response with mock data
-     - Empty database handling (all zeros/empty arrays)
-     - Database error handling (500 response)
-     - Missing days filled with zero counts
-   - All 4 tests pass
-
-### Files created/modified:
-- `scamscrammer/prisma/schema.prisma` - Database schema with Call, CallSegment models and enums
-- `scamscrammer/prisma.config.ts` - Prisma 7 configuration
-- `scamscrammer/src/lib/db.ts` - Prisma client singleton
-- `scamscrammer/src/types/index.ts` - TypeScript type definitions
-- `scamscrammer/src/app/api/stats/route.ts` - Stats API endpoint
-- `scamscrammer/src/app/api/stats/__tests__/route.test.ts` - API tests
-- `scamscrammer/jest.config.mjs` - Jest configuration
-- `scamscrammer/jest.setup.js` - Jest setup
-- `scamscrammer/package.json` - Added test scripts and dependencies
-
----
-
-## Task: Create Call Status Webhook Handler
-
-**Status:** Completed
-**Date:** 2026-01-19
-
-### What was done:
-
-1. **Created Twilio Call Status Webhook Handler**
-   - Created `src/app/api/twilio/status/route.ts` with POST handler
-   - Endpoint: `POST /api/twilio/status`
-   - Receives call status updates from Twilio
-
-2. **Status Mapping Implementation**
-   - Maps Twilio call statuses to application CallStatus enum:
-     - `queued`, `ringing` → `RINGING`
-     - `in-progress` → `IN_PROGRESS`
-     - `completed` → `COMPLETED`
-     - `busy`, `no-answer`, `canceled` → `NO_ANSWER`
-     - `failed` → `FAILED`
-
-3. **Request Handling Features**
-   - Supports both `application/x-www-form-urlencoded` (Twilio default) and `application/json` content types
-   - Validates required fields: CallSid, AccountSid, From, To, CallStatus, Direction
-   - Validates CallStatus is one of the expected Twilio values
-   - Parses optional CallDuration field when present
-
-4. **Database Operations**
-   - Finds existing call by twilioSid and updates status/duration
-   - Creates new call record if CallSid not found (handles race conditions when status callback arrives before incoming call handler)
-   - Properly handles duration as optional field
-
-5. **Error Handling**
-   - Returns 400 for invalid payloads with specific error codes
-   - Returns 409 for unique constraint violations (duplicate calls)
-   - Returns 500 for general database/server errors
-   - Comprehensive console logging for debugging
-
-6. **Comprehensive Test Suite**
-   - Created `src/app/api/twilio/status/__tests__/route.test.ts`
-   - 23 tests covering all functionality:
-     - Payload validation (4 tests)
-     - Status updates for existing calls (8 tests for all status mappings)
-     - Creating new calls (2 tests)
-     - Content-type handling (2 tests)
-     - Error handling (4 tests)
-     - Edge cases (3 tests including duration=0, international phone numbers)
-   - All tests pass
-
-7. **Added tsconfig.json**
-   - Created `tsconfig.json` for proper TypeScript path alias resolution
-   - Enables `@/*` imports to resolve to `./src/*`
-
-### Files created/modified:
-- `scamscrammer/src/app/api/twilio/status/route.ts` - Webhook handler (new)
-- `scamscrammer/src/app/api/twilio/status/__tests__/route.test.ts` - Tests (new)
-- `scamscrammer/tsconfig.json` - TypeScript configuration (new)

@@ -1,8 +1,8 @@
 /**
- * Storage Service for Call Recordings
+ * ScamScrammer Storage Service
  *
- * This module provides S3-based storage operations for call recordings,
- * including upload, retrieval, deletion, and listing functionality.
+ * Handles AWS S3 operations for storing and managing call recordings.
+ * Provides methods for uploading, retrieving, deleting, and listing recordings.
  */
 
 import {
@@ -12,486 +12,567 @@ import {
   DeleteObjectCommand,
   ListObjectsV2Command,
   HeadObjectCommand,
+  type PutObjectCommandInput,
+  type GetObjectCommandInput,
+  type DeleteObjectCommandInput,
+  type ListObjectsV2CommandInput,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
-/**
- * Storage configuration from environment variables
- */
-export interface StorageConfig {
-  region: string;
-  bucket: string;
-  accessKeyId?: string;
-  secretAccessKey?: string;
-}
-
-/**
- * Options for listing recordings
- */
-export interface ListRecordingsOptions {
-  limit?: number;
-  continuationToken?: string;
-  prefix?: string;
-}
-
-/**
- * Recording metadata returned from storage
- */
-export interface RecordingMetadata {
-  key: string;
-  callId: string;
-  size: number;
-  lastModified: Date;
-  contentType: string;
-}
-
-/**
- * Response for listing recordings
- */
-export interface ListRecordingsResponse {
-  recordings: RecordingMetadata[];
-  nextToken?: string;
-  hasMore: boolean;
-}
-
-/**
- * Upload result
- */
-export interface UploadResult {
-  key: string;
-  bucket: string;
-  location: string;
-}
+import {
+  StoragePaginationOptions,
+  StorageListResult,
+  RecordingMetadata,
+  StorageConfig,
+  UploadResult,
+  StorageErrorCode,
+} from '@/types';
 
 /**
  * Custom error class for storage operations
  */
 export class StorageError extends Error {
-  constructor(
-    message: string,
-    public readonly code: string,
-    public readonly cause?: unknown
-  ) {
+  public readonly code: StorageErrorCode;
+  public readonly cause?: Error;
+
+  constructor(message: string, code: StorageErrorCode, cause?: Error) {
     super(message);
     this.name = 'StorageError';
+    this.code = code;
+    this.cause = cause;
+
+    // Maintains proper stack trace for where error was thrown (V8 engines)
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, StorageError);
+    }
   }
 }
 
 /**
- * Get storage configuration from environment variables
+ * Default expiration time for signed URLs (1 hour in seconds)
  */
-function getStorageConfig(): StorageConfig {
-  const region = process.env.AWS_REGION;
-  const bucket = process.env.AWS_BUCKET_NAME;
-
-  if (!region) {
-    throw new StorageError('AWS_REGION environment variable is not set', 'CONFIG_ERROR');
-  }
-
-  if (!bucket) {
-    throw new StorageError('AWS_BUCKET_NAME environment variable is not set', 'CONFIG_ERROR');
-  }
-
-  return {
-    region,
-    bucket,
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-  };
-}
+const DEFAULT_URL_EXPIRATION = 3600;
 
 /**
- * Global singleton for storage client
+ * Default content type for audio recordings
  */
-const globalForStorage = globalThis as unknown as {
-  storageClient: StorageClient | undefined;
-};
+const DEFAULT_CONTENT_TYPE = 'audio/wav';
 
 /**
- * Storage client for managing call recordings in S3
+ * Prefix for all recording objects in S3
+ */
+const RECORDINGS_PREFIX = 'recordings/';
+
+/**
+ * StorageClient class for managing call recordings in AWS S3
  */
 export class StorageClient {
-  private s3: S3Client;
-  private bucket: string;
-  private region: string;
+  private readonly client: S3Client;
+  private readonly bucketName: string;
+  private readonly region: string;
 
+  /**
+   * Creates a new StorageClient instance
+   *
+   * @param config - Optional configuration. If not provided, uses environment variables.
+   * @throws StorageError if configuration is invalid or missing
+   */
   constructor(config?: Partial<StorageConfig>) {
-    const envConfig = getStorageConfig();
-    const finalConfig = { ...envConfig, ...config };
+    const region = config?.region ?? process.env.AWS_REGION;
+    const bucketName = config?.bucketName ?? process.env.AWS_BUCKET_NAME;
+    const accessKeyId = config?.accessKeyId ?? process.env.AWS_ACCESS_KEY_ID;
+    const secretAccessKey = config?.secretAccessKey ?? process.env.AWS_SECRET_ACCESS_KEY;
 
-    this.bucket = finalConfig.bucket;
-    this.region = finalConfig.region;
-
-    const s3Config: ConstructorParameters<typeof S3Client>[0] = {
-      region: this.region,
-    };
-
-    // Only set credentials if explicitly provided
-    // Otherwise, let the SDK use default credential chain (IAM roles, etc.)
-    if (finalConfig.accessKeyId && finalConfig.secretAccessKey) {
-      s3Config.credentials = {
-        accessKeyId: finalConfig.accessKeyId,
-        secretAccessKey: finalConfig.secretAccessKey,
-      };
+    if (!region) {
+      throw new StorageError(
+        'AWS_REGION is required',
+        StorageErrorCode.INVALID_CONFIG
+      );
+    }
+    if (!bucketName) {
+      throw new StorageError(
+        'AWS_BUCKET_NAME is required',
+        StorageErrorCode.INVALID_CONFIG
+      );
+    }
+    if (!accessKeyId) {
+      throw new StorageError(
+        'AWS_ACCESS_KEY_ID is required',
+        StorageErrorCode.INVALID_CONFIG
+      );
+    }
+    if (!secretAccessKey) {
+      throw new StorageError(
+        'AWS_SECRET_ACCESS_KEY is required',
+        StorageErrorCode.INVALID_CONFIG
+      );
     }
 
-    this.s3 = new S3Client(s3Config);
+    this.region = region;
+    this.bucketName = bucketName;
+
+    this.client = new S3Client({
+      region,
+      credentials: {
+        accessKeyId,
+        secretAccessKey,
+      },
+    });
   }
 
   /**
-   * Generate a consistent storage key for a call recording
+   * Generates a consistent S3 key for a recording
+   *
+   * Format: recordings/{YYYY-MM-DD}/{callId}.wav
    *
    * @param callId - The unique call identifier
-   * @param extension - File extension (default: 'wav')
+   * @param date - Optional date for the recording (defaults to now)
    * @returns The S3 object key
    */
-  generateStorageKey(callId: string, extension: string = 'wav'): string {
-    // Use date-based partitioning for better S3 performance
-    const date = new Date();
-    const year = date.getUTCFullYear();
-    const month = String(date.getUTCMonth() + 1).padStart(2, '0');
-    const day = String(date.getUTCDate()).padStart(2, '0');
-
-    return `recordings/${year}/${month}/${day}/${callId}.${extension}`;
+  public generateStorageKey(callId: string, date?: Date): string {
+    const recordingDate = date ?? new Date();
+    const dateStr = recordingDate.toISOString().split('T')[0]; // YYYY-MM-DD
+    return `${RECORDINGS_PREFIX}${dateStr}/${callId}.wav`;
   }
 
   /**
-   * Extract call ID from a storage key
+   * Extracts the call ID from an S3 object key
    *
    * @param key - The S3 object key
-   * @returns The call ID
+   * @returns The extracted call ID
    */
-  extractCallIdFromKey(key: string): string {
-    const filename = key.split('/').pop() || '';
-    return filename.replace(/\.[^.]+$/, '');
+  public extractCallIdFromKey(key: string): string {
+    // Key format: recordings/YYYY-MM-DD/callId.wav
+    const filename = key.split('/').pop() ?? '';
+    return filename.replace(/\.[^/.]+$/, ''); // Remove extension
   }
 
   /**
-   * Upload a recording to S3
+   * Uploads a recording to S3
    *
    * @param callId - The unique call identifier
    * @param audioBuffer - The audio data as a Buffer
-   * @param contentType - MIME type of the audio (default: 'audio/wav')
-   * @returns Upload result with key and location
+   * @param contentType - Optional MIME type (defaults to 'audio/wav')
+   * @returns Upload result with key and URL
+   * @throws StorageError if upload fails
    */
-  async uploadRecording(
+  public async uploadRecording(
     callId: string,
     audioBuffer: Buffer,
-    contentType: string = 'audio/wav'
+    contentType: string = DEFAULT_CONTENT_TYPE
   ): Promise<UploadResult> {
-    const extension = this.getExtensionFromContentType(contentType);
-    const key = this.generateStorageKey(callId, extension);
+    const key = this.generateStorageKey(callId);
+
+    const params: PutObjectCommandInput = {
+      Bucket: this.bucketName,
+      Key: key,
+      Body: audioBuffer,
+      ContentType: contentType,
+      Metadata: {
+        'call-id': callId,
+        'uploaded-at': new Date().toISOString(),
+      },
+    };
 
     try {
-      await this.s3.send(
-        new PutObjectCommand({
-          Bucket: this.bucket,
-          Key: key,
-          Body: audioBuffer,
-          ContentType: contentType,
-          Metadata: {
-            callId,
-            uploadedAt: new Date().toISOString(),
-          },
-        })
-      );
+      await this.client.send(new PutObjectCommand(params));
 
       return {
         key,
-        bucket: this.bucket,
-        location: `https://${this.bucket}.s3.${this.region}.amazonaws.com/${key}`,
+        url: `https://${this.bucketName}.s3.${this.region}.amazonaws.com/${key}`,
+        size: audioBuffer.length,
       };
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+
+      // Check for specific AWS error types
+      if (errorMessage.includes('QuotaExceeded') || errorMessage.includes('EntityTooLarge')) {
+        throw new StorageError(
+          `Upload failed: Storage quota exceeded for call ${callId}`,
+          StorageErrorCode.QUOTA_EXCEEDED,
+          error instanceof Error ? error : undefined
+        );
+      }
+
+      if (errorMessage.includes('AccessDenied')) {
+        throw new StorageError(
+          `Upload failed: Access denied for call ${callId}`,
+          StorageErrorCode.ACCESS_DENIED,
+          error instanceof Error ? error : undefined
+        );
+      }
+
       throw new StorageError(
-        `Failed to upload recording for call ${callId}`,
-        'UPLOAD_ERROR',
-        error
+        `Failed to upload recording for call ${callId}: ${errorMessage}`,
+        StorageErrorCode.UPLOAD_FAILED,
+        error instanceof Error ? error : undefined
       );
     }
   }
 
   /**
-   * Get a signed URL for downloading a recording
+   * Generates a signed URL for accessing a recording
    *
    * @param callId - The unique call identifier
-   * @param expiresIn - URL expiration time in seconds (default: 3600 = 1 hour)
+   * @param expiresIn - URL expiration time in seconds (default: 3600)
    * @returns Signed URL for the recording
+   * @throws StorageError if URL generation fails or recording not found
    */
-  async getRecordingUrl(callId: string, expiresIn: number = 3600): Promise<string> {
-    // First, find the recording key by listing with the callId prefix
-    const key = await this.findRecordingKey(callId);
+  public async getRecordingUrl(
+    callId: string,
+    expiresIn: number = DEFAULT_URL_EXPIRATION
+  ): Promise<string> {
+    const key = this.generateStorageKey(callId);
 
-    if (!key) {
-      throw new StorageError(
-        `Recording not found for call ${callId}`,
-        'NOT_FOUND'
-      );
-    }
-
+    // First, verify the object exists
     try {
-      const command = new GetObjectCommand({
-        Bucket: this.bucket,
-        Key: key,
-      });
-
-      return await getSignedUrl(this.s3, command, { expiresIn });
-    } catch (error) {
-      throw new StorageError(
-        `Failed to generate signed URL for call ${callId}`,
-        'URL_ERROR',
-        error
-      );
-    }
-  }
-
-  /**
-   * Delete a recording from S3
-   *
-   * @param callId - The unique call identifier
-   * @returns true if deleted, false if not found
-   */
-  async deleteRecording(callId: string): Promise<boolean> {
-    const key = await this.findRecordingKey(callId);
-
-    if (!key) {
-      return false;
-    }
-
-    try {
-      await this.s3.send(
-        new DeleteObjectCommand({
-          Bucket: this.bucket,
+      await this.client.send(
+        new HeadObjectCommand({
+          Bucket: this.bucketName,
           Key: key,
         })
       );
-      return true;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+
+      if (errorMessage.includes('NotFound') || errorMessage.includes('NoSuchKey')) {
+        throw new StorageError(
+          `Recording not found for call ${callId}`,
+          StorageErrorCode.NOT_FOUND,
+          error instanceof Error ? error : undefined
+        );
+      }
+
+      throw new StorageError(
+        `Failed to verify recording for call ${callId}: ${errorMessage}`,
+        StorageErrorCode.DOWNLOAD_FAILED,
+        error instanceof Error ? error : undefined
+      );
+    }
+
+    // Generate signed URL
+    const params: GetObjectCommandInput = {
+      Bucket: this.bucketName,
+      Key: key,
+    };
+
+    try {
+      const signedUrl = await getSignedUrl(
+        this.client,
+        new GetObjectCommand(params),
+        { expiresIn }
+      );
+      return signedUrl;
     } catch (error) {
       throw new StorageError(
-        `Failed to delete recording for call ${callId}`,
-        'DELETE_ERROR',
-        error
+        `Failed to generate signed URL for call ${callId}`,
+        StorageErrorCode.DOWNLOAD_FAILED,
+        error instanceof Error ? error : undefined
       );
     }
   }
 
   /**
-   * List recordings with optional pagination
+   * Retrieves a recording URL by its S3 key (instead of callId)
+   * Useful when the key is already known from listing results
    *
-   * @param options - Listing options (limit, continuationToken, prefix)
-   * @returns List of recording metadata with pagination info
+   * @param key - The S3 object key
+   * @param expiresIn - URL expiration time in seconds (default: 3600)
+   * @returns Signed URL for the recording
    */
-  async listRecordings(options: ListRecordingsOptions = {}): Promise<ListRecordingsResponse> {
-    const { limit = 100, continuationToken, prefix = 'recordings/' } = options;
+  public async getRecordingUrlByKey(
+    key: string,
+    expiresIn: number = DEFAULT_URL_EXPIRATION
+  ): Promise<string> {
+    const params: GetObjectCommandInput = {
+      Bucket: this.bucketName,
+      Key: key,
+    };
 
     try {
-      const response = await this.s3.send(
-        new ListObjectsV2Command({
-          Bucket: this.bucket,
-          Prefix: prefix,
-          MaxKeys: limit,
-          ContinuationToken: continuationToken,
-        })
+      const signedUrl = await getSignedUrl(
+        this.client,
+        new GetObjectCommand(params),
+        { expiresIn }
       );
+      return signedUrl;
+    } catch (error) {
+      throw new StorageError(
+        `Failed to generate signed URL for key ${key}`,
+        StorageErrorCode.DOWNLOAD_FAILED,
+        error instanceof Error ? error : undefined
+      );
+    }
+  }
 
-      const recordings: RecordingMetadata[] = (response.Contents || [])
-        .filter((obj) => obj.Key && obj.Size !== undefined)
+  /**
+   * Deletes a recording from S3
+   *
+   * @param callId - The unique call identifier
+   * @throws StorageError if deletion fails (but not if file doesn't exist)
+   */
+  public async deleteRecording(callId: string): Promise<void> {
+    const key = this.generateStorageKey(callId);
+
+    const params: DeleteObjectCommandInput = {
+      Bucket: this.bucketName,
+      Key: key,
+    };
+
+    try {
+      // S3 DeleteObject is idempotent - it succeeds even if the object doesn't exist
+      await this.client.send(new DeleteObjectCommand(params));
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+
+      if (errorMessage.includes('AccessDenied')) {
+        throw new StorageError(
+          `Delete failed: Access denied for call ${callId}`,
+          StorageErrorCode.ACCESS_DENIED,
+          error instanceof Error ? error : undefined
+        );
+      }
+
+      throw new StorageError(
+        `Failed to delete recording for call ${callId}: ${errorMessage}`,
+        StorageErrorCode.DELETE_FAILED,
+        error instanceof Error ? error : undefined
+      );
+    }
+  }
+
+  /**
+   * Deletes a recording by its S3 key (instead of callId)
+   * Useful when cleaning up recordings with known keys
+   *
+   * @param key - The S3 object key
+   */
+  public async deleteRecordingByKey(key: string): Promise<void> {
+    const params: DeleteObjectCommandInput = {
+      Bucket: this.bucketName,
+      Key: key,
+    };
+
+    try {
+      await this.client.send(new DeleteObjectCommand(params));
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+
+      throw new StorageError(
+        `Failed to delete recording with key ${key}: ${errorMessage}`,
+        StorageErrorCode.DELETE_FAILED,
+        error instanceof Error ? error : undefined
+      );
+    }
+  }
+
+  /**
+   * Lists recordings from S3 with optional filtering and pagination
+   *
+   * @param options - Pagination and filtering options
+   * @returns List result with recordings and pagination info
+   * @throws StorageError if listing fails
+   */
+  public async listRecordings(
+    options: StoragePaginationOptions = {}
+  ): Promise<StorageListResult> {
+    const { maxKeys = 100, continuationToken, prefix } = options;
+
+    // Build the full prefix (always under recordings/)
+    const fullPrefix = prefix
+      ? `${RECORDINGS_PREFIX}${prefix}`
+      : RECORDINGS_PREFIX;
+
+    const params: ListObjectsV2CommandInput = {
+      Bucket: this.bucketName,
+      Prefix: fullPrefix,
+      MaxKeys: maxKeys,
+      ContinuationToken: continuationToken,
+    };
+
+    try {
+      const response = await this.client.send(new ListObjectsV2Command(params));
+
+      const recordings: RecordingMetadata[] = (response.Contents ?? [])
+        .filter((obj) => obj.Key && obj.Key.endsWith('.wav'))
         .map((obj) => ({
           key: obj.Key!,
+          size: obj.Size ?? 0,
+          contentType: DEFAULT_CONTENT_TYPE,
+          lastModified: obj.LastModified ?? new Date(),
           callId: this.extractCallIdFromKey(obj.Key!),
-          size: obj.Size!,
-          lastModified: obj.LastModified || new Date(),
-          contentType: this.getContentTypeFromKey(obj.Key!),
         }));
 
       return {
         recordings,
-        nextToken: response.NextContinuationToken,
-        hasMore: response.IsTruncated || false,
+        nextContinuationToken: response.NextContinuationToken,
+        isTruncated: response.IsTruncated ?? false,
+        count: recordings.length,
       };
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+
+      if (errorMessage.includes('AccessDenied')) {
+        throw new StorageError(
+          'List failed: Access denied to bucket',
+          StorageErrorCode.ACCESS_DENIED,
+          error instanceof Error ? error : undefined
+        );
+      }
+
       throw new StorageError(
-        'Failed to list recordings',
-        'LIST_ERROR',
-        error
+        `Failed to list recordings: ${errorMessage}`,
+        StorageErrorCode.NETWORK_ERROR,
+        error instanceof Error ? error : undefined
       );
     }
   }
 
   /**
-   * Check if a recording exists
+   * Checks if a recording exists in S3
    *
    * @param callId - The unique call identifier
-   * @returns true if exists, false otherwise
+   * @returns True if the recording exists
    */
-  async recordingExists(callId: string): Promise<boolean> {
-    const key = await this.findRecordingKey(callId);
-    return key !== null;
+  public async recordingExists(callId: string): Promise<boolean> {
+    const key = this.generateStorageKey(callId);
+
+    try {
+      await this.client.send(
+        new HeadObjectCommand({
+          Bucket: this.bucketName,
+          Key: key,
+        })
+      );
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**
-   * Get recording metadata without downloading the file
+   * Gets metadata for a specific recording
    *
    * @param callId - The unique call identifier
-   * @returns Recording metadata or null if not found
+   * @returns Recording metadata
+   * @throws StorageError if recording not found
    */
-  async getRecordingMetadata(callId: string): Promise<RecordingMetadata | null> {
-    const key = await this.findRecordingKey(callId);
-
-    if (!key) {
-      return null;
-    }
+  public async getRecordingMetadata(callId: string): Promise<RecordingMetadata> {
+    const key = this.generateStorageKey(callId);
 
     try {
-      const response = await this.s3.send(
+      const response = await this.client.send(
         new HeadObjectCommand({
-          Bucket: this.bucket,
+          Bucket: this.bucketName,
           Key: key,
         })
       );
 
       return {
         key,
+        size: response.ContentLength ?? 0,
+        contentType: response.ContentType ?? DEFAULT_CONTENT_TYPE,
+        lastModified: response.LastModified ?? new Date(),
         callId,
-        size: response.ContentLength || 0,
-        lastModified: response.LastModified || new Date(),
-        contentType: response.ContentType || 'audio/wav',
       };
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+
+      if (errorMessage.includes('NotFound') || errorMessage.includes('NoSuchKey')) {
+        throw new StorageError(
+          `Recording not found for call ${callId}`,
+          StorageErrorCode.NOT_FOUND,
+          error instanceof Error ? error : undefined
+        );
+      }
+
       throw new StorageError(
-        `Failed to get metadata for call ${callId}`,
-        'METADATA_ERROR',
-        error
+        `Failed to get metadata for call ${callId}: ${errorMessage}`,
+        StorageErrorCode.DOWNLOAD_FAILED,
+        error instanceof Error ? error : undefined
       );
     }
   }
 
   /**
-   * Find the storage key for a recording by call ID
-   * Searches across date partitions
+   * Downloads recording data as a Buffer
    *
    * @param callId - The unique call identifier
-   * @returns The S3 key if found, null otherwise
+   * @returns The recording audio data
+   * @throws StorageError if download fails
    */
-  private async findRecordingKey(callId: string): Promise<string | null> {
+  public async downloadRecording(callId: string): Promise<Buffer> {
+    const key = this.generateStorageKey(callId);
+
     try {
-      // Search for the recording across all partitions
-      // This handles cases where we don't know the exact date
-      const response = await this.s3.send(
-        new ListObjectsV2Command({
-          Bucket: this.bucket,
-          Prefix: 'recordings/',
-          MaxKeys: 1000,
+      const response = await this.client.send(
+        new GetObjectCommand({
+          Bucket: this.bucketName,
+          Key: key,
         })
       );
 
-      const found = (response.Contents || []).find((obj) => {
-        if (!obj.Key) return false;
-        const extractedCallId = this.extractCallIdFromKey(obj.Key);
-        return extractedCallId === callId;
-      });
+      if (!response.Body) {
+        throw new StorageError(
+          `Empty response body for call ${callId}`,
+          StorageErrorCode.DOWNLOAD_FAILED
+        );
+      }
 
-      return found?.Key || null;
+      // Convert stream to buffer
+      const chunks: Uint8Array[] = [];
+      const stream = response.Body as AsyncIterable<Uint8Array>;
+
+      for await (const chunk of stream) {
+        chunks.push(chunk);
+      }
+
+      return Buffer.concat(chunks);
     } catch (error) {
+      if (error instanceof StorageError) {
+        throw error;
+      }
+
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+
+      if (errorMessage.includes('NotFound') || errorMessage.includes('NoSuchKey')) {
+        throw new StorageError(
+          `Recording not found for call ${callId}`,
+          StorageErrorCode.NOT_FOUND,
+          error instanceof Error ? error : undefined
+        );
+      }
+
       throw new StorageError(
-        `Failed to find recording for call ${callId}`,
-        'FIND_ERROR',
-        error
+        `Failed to download recording for call ${callId}: ${errorMessage}`,
+        StorageErrorCode.DOWNLOAD_FAILED,
+        error instanceof Error ? error : undefined
       );
     }
   }
+}
 
-  /**
-   * Get file extension from content type
-   */
-  private getExtensionFromContentType(contentType: string): string {
-    const typeToExtension: Record<string, string> = {
-      'audio/wav': 'wav',
-      'audio/wave': 'wav',
-      'audio/x-wav': 'wav',
-      'audio/mpeg': 'mp3',
-      'audio/mp3': 'mp3',
-      'audio/ogg': 'ogg',
-      'audio/webm': 'webm',
-      'audio/flac': 'flac',
-    };
+// ============================================================================
+// Singleton Instance
+// ============================================================================
 
-    return typeToExtension[contentType] || 'wav';
+let storageClientInstance: StorageClient | null = null;
+
+/**
+ * Gets or creates the singleton StorageClient instance
+ *
+ * @returns The StorageClient instance
+ */
+export function getStorageClient(): StorageClient {
+  if (!storageClientInstance) {
+    storageClientInstance = new StorageClient();
   }
-
-  /**
-   * Get content type from file extension in key
-   */
-  private getContentTypeFromKey(key: string): string {
-    const extension = key.split('.').pop()?.toLowerCase();
-    const extensionToType: Record<string, string> = {
-      wav: 'audio/wav',
-      mp3: 'audio/mpeg',
-      ogg: 'audio/ogg',
-      webm: 'audio/webm',
-      flac: 'audio/flac',
-    };
-
-    return extensionToType[extension || ''] || 'audio/wav';
-  }
+  return storageClientInstance;
 }
 
 /**
- * Get the singleton storage client instance
+ * Resets the singleton instance (useful for testing)
  */
-export function getStorageClient(config?: Partial<StorageConfig>): StorageClient {
-  if (!globalForStorage.storageClient) {
-    globalForStorage.storageClient = new StorageClient(config);
-  }
-  return globalForStorage.storageClient;
+export function resetStorageClient(): void {
+  storageClientInstance = null;
 }
-
-/**
- * Default export: singleton storage client
- * Usage: import storage from '@/lib/storage'; storage.uploadRecording(...)
- */
-export const storage = {
-  /**
-   * Upload a recording to S3
-   */
-  uploadRecording: (
-    callId: string,
-    audioBuffer: Buffer,
-    contentType?: string
-  ) => getStorageClient().uploadRecording(callId, audioBuffer, contentType),
-
-  /**
-   * Get a signed URL for a recording
-   */
-  getRecordingUrl: (callId: string, expiresIn?: number) =>
-    getStorageClient().getRecordingUrl(callId, expiresIn),
-
-  /**
-   * Delete a recording
-   */
-  deleteRecording: (callId: string) => getStorageClient().deleteRecording(callId),
-
-  /**
-   * List recordings with pagination
-   */
-  listRecordings: (options?: ListRecordingsOptions) =>
-    getStorageClient().listRecordings(options),
-
-  /**
-   * Generate a storage key for a call ID
-   */
-  generateStorageKey: (callId: string, extension?: string) =>
-    getStorageClient().generateStorageKey(callId, extension),
-
-  /**
-   * Check if a recording exists
-   */
-  recordingExists: (callId: string) => getStorageClient().recordingExists(callId),
-
-  /**
-   * Get recording metadata
-   */
-  getRecordingMetadata: (callId: string) =>
-    getStorageClient().getRecordingMetadata(callId),
-};
-
-export default storage;
