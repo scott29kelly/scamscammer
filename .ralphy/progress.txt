@@ -67,3 +67,86 @@
 - `scamscrammer/jest.config.mjs` - Jest configuration
 - `scamscrammer/jest.setup.js` - Jest setup
 - `scamscrammer/package.json` - Added test scripts and dependencies
+
+---
+
+## Task: Create Calls REST API Endpoints
+
+**Status:** Completed
+**Date:** 2026-01-19
+
+### What was done:
+
+1. **Created GET /api/calls endpoint** (`src/app/api/calls/route.ts`)
+   - Lists calls with pagination (default: 20 per page, max: 100)
+   - Filtering by:
+     - `status` - filter by CallStatus enum (RINGING, IN_PROGRESS, COMPLETED, FAILED, NO_ANSWER)
+     - `startDate` - filter calls created on or after this date
+     - `endDate` - filter calls created on or before this date
+   - Sorting by:
+     - `sortBy` - field to sort by (createdAt, duration, rating)
+     - `sortOrder` - direction (asc or desc, default: desc)
+   - Returns paginated response with:
+     - `calls` - array of CallListItem objects
+     - `pagination` - metadata (total, page, limit, totalPages, hasNext, hasPrev)
+   - Includes segment count for each call
+   - Validates all query parameters with appropriate error messages
+
+2. **Created GET /api/calls/[id] endpoint** (`src/app/api/calls/[id]/route.ts`)
+   - Retrieves single call with all segments
+   - Segments ordered by timestamp (ascending)
+   - Returns 404 if call not found
+   - Returns full CallResponse including all segments
+
+3. **Created PATCH /api/calls/[id] endpoint**
+   - Updates call metadata (rating, notes, tags)
+   - Validates:
+     - `rating` - must be integer between 1-5
+     - `notes` - must be string or null
+     - `tags` - must be array of strings
+   - Returns validation errors with details
+   - Returns 404 if call not found
+   - Returns 400 if no valid fields provided
+
+4. **Created DELETE /api/calls/[id] endpoint**
+   - Deletes call and associated segments (via Prisma cascade)
+   - Returns 204 No Content on success
+   - Returns 404 if call not found
+   - Includes TODO for S3 recording cleanup
+
+5. **Created tsconfig.json**
+   - Added missing TypeScript configuration file
+   - Configured path aliases (`@/*` -> `./src/*`)
+   - Required for Jest tests to resolve imports
+
+6. **Created comprehensive test suites**
+   - `src/app/api/calls/__tests__/route.test.ts` (15 tests)
+     - Pagination tests (default, custom, limits)
+     - Filtering tests (status, date range)
+     - Sorting tests (by field, by order)
+     - Validation error tests (invalid status, dates, sort params)
+     - Empty results handling
+     - Database error handling (500 response)
+   - `src/app/api/calls/[id]/__tests__/route.test.ts` (20 tests)
+     - GET: Returns call with segments, 404, 500
+     - PATCH: Update rating, notes, tags (individual and combined)
+     - PATCH: Validation errors (rating range, non-integer, invalid tags)
+     - PATCH: Invalid JSON body, no valid fields
+     - DELETE: Success (204), 404, 500
+   - All 35 tests pass
+
+### Files created:
+- `scamscrammer/src/app/api/calls/route.ts` - Calls list endpoint (GET)
+- `scamscrammer/src/app/api/calls/[id]/route.ts` - Individual call endpoint (GET, PATCH, DELETE)
+- `scamscrammer/src/app/api/calls/__tests__/route.test.ts` - List endpoint tests
+- `scamscrammer/src/app/api/calls/[id]/__tests__/route.test.ts` - Individual call tests
+- `scamscrammer/tsconfig.json` - TypeScript configuration
+
+### API Endpoints Summary:
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | /api/calls | List calls with pagination, filtering, sorting |
+| GET | /api/calls/[id] | Get single call with all segments |
+| PATCH | /api/calls/[id] | Update rating, notes, tags |
+| DELETE | /api/calls/[id] | Delete call and segments |
