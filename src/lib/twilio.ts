@@ -1,13 +1,11 @@
 /**
- * Twilio Client and Helpers
+ * Twilio client and helper functions for ScamScrammer
  *
- * This module provides Twilio SDK wrapper functions for voice call handling,
- * TwiML generation, and webhook validation.
+ * Provides webhook validation, TwiML generation, and phone number utilities
  */
 
-import { NextRequest } from "next/server";
-import twilio from "twilio";
-import type { TwiMLOptions, TwilioWebhookPayload } from "@/types";
+import { NextRequest } from 'next/server';
+import crypto from 'crypto';
 
 // =============================================================================
 // Environment Configuration
@@ -16,112 +14,137 @@ import type { TwiMLOptions, TwilioWebhookPayload } from "@/types";
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
 const TWILIO_PHONE_NUMBER = process.env.TWILIO_PHONE_NUMBER;
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
-
-// =============================================================================
-// Custom Error Class
-// =============================================================================
-
-/**
- * Custom error class for Twilio-related errors
- */
-export class TwilioClientError extends Error {
-  public readonly code: string;
-  public readonly cause?: Error;
-
-  constructor(message: string, code: string, cause?: Error) {
-    super(message);
-    this.name = "TwilioClientError";
-    this.code = code;
-    this.cause = cause;
-  }
-}
-
-// =============================================================================
-// Twilio Client Singleton
-// =============================================================================
-
-let twilioClient: twilio.Twilio | null = null;
-
-/**
- * Get the Twilio client singleton instance
- * @throws {TwilioClientError} If credentials are not configured
- */
-export function getTwilioClient(): twilio.Twilio {
-  if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN) {
-    throw new TwilioClientError(
-      "Twilio credentials not configured. Set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN.",
-      "CREDENTIALS_MISSING"
-    );
-  }
-
-  if (!twilioClient) {
-    twilioClient = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
-  }
-
-  return twilioClient;
-}
 
 // =============================================================================
 // Webhook Validation
 // =============================================================================
 
 /**
- * Parse the webhook body from a Twilio request.
- * Twilio sends data as application/x-www-form-urlencoded.
+ * Validate that a webhook request actually came from Twilio
  *
- * @param request - The incoming Next.js request
- * @returns Parsed form data as key-value pairs
- */
-export async function parseTwilioWebhookBody(
-  request: NextRequest
-): Promise<Record<string, string>> {
-  const text = await request.text();
-  const params = new URLSearchParams(text);
-  const body: Record<string, string> = {};
-
-  params.forEach((value, key) => {
-    body[key] = value;
-  });
-
-  return body;
-}
-
-/**
- * Validate that a request came from Twilio using the X-Twilio-Signature header.
+ * Uses Twilio's signature validation to verify the authenticity of webhook requests.
+ * See: https://www.twilio.com/docs/usage/webhooks/webhooks-security
  *
- * @param request - The incoming Next.js request
- * @param body - The parsed form data from the request
- * @returns True if the signature is valid, false otherwise
+ * @param request - The incoming NextRequest
+ * @param body - The parsed body as a Record<string, string>
+ * @returns true if the signature is valid, false otherwise
  */
 export async function validateTwilioSignature(
   request: NextRequest,
   body: Record<string, string>
 ): Promise<boolean> {
-  // Skip validation in development if no auth token
-  if (process.env.NODE_ENV === "development" && !TWILIO_AUTH_TOKEN) {
-    console.warn(
-      "Skipping Twilio signature validation in development (no auth token)"
-    );
-    return true;
-  }
-
+  // Skip validation in development if no auth token is set
   if (!TWILIO_AUTH_TOKEN) {
-    throw new TwilioClientError(
-      "TWILIO_AUTH_TOKEN is required for signature validation",
-      "AUTH_TOKEN_MISSING"
-    );
+    console.warn('TWILIO_AUTH_TOKEN not set, skipping signature validation');
+    return process.env.NODE_ENV === 'development';
   }
 
-  const signature = request.headers.get("X-Twilio-Signature");
+  const signature = request.headers.get('x-twilio-signature');
   if (!signature) {
+    console.warn('Missing X-Twilio-Signature header');
     return false;
   }
 
-  // Get the full URL that Twilio used to call us
-  const url = request.url;
+  // Build the full URL Twilio used to sign the request
+  const url = buildSignatureUrl(request);
 
-  return twilio.validateRequest(TWILIO_AUTH_TOKEN, signature, url, body);
+  // Compute expected signature
+  const expectedSignature = computeTwilioSignature(url, body);
+
+  // Constant-time comparison to prevent timing attacks
+  return timingSafeEqual(signature, expectedSignature);
+}
+
+/**
+ * Build the URL string used for Twilio signature validation
+ *
+ * Twilio uses the full URL including protocol, host, and path
+ * The URL must match exactly what Twilio has configured
+ */
+function buildSignatureUrl(request: NextRequest): string {
+  // Use the x-forwarded headers if behind a proxy (Vercel, etc.)
+  const protocol = request.headers.get('x-forwarded-proto') || 'https';
+  const host = request.headers.get('x-forwarded-host') || request.headers.get('host') || '';
+
+  // Get the pathname from the request URL
+  const { pathname } = new URL(request.url);
+
+  return `${protocol}://${host}${pathname}`;
+}
+
+/**
+ * Compute the expected Twilio signature for a given URL and body
+ *
+ * Twilio's signature algorithm:
+ * 1. Take the full URL
+ * 2. Sort the POST parameters alphabetically by key
+ * 3. Append each key-value pair to the URL (no delimiters)
+ * 4. HMAC-SHA1 the result using your auth token
+ * 5. Base64 encode the hash
+ */
+function computeTwilioSignature(url: string, body: Record<string, string>): string {
+  // Sort parameters alphabetically and append to URL
+  const sortedKeys = Object.keys(body).sort();
+  let data = url;
+
+  for (const key of sortedKeys) {
+    data += key + body[key];
+  }
+
+  // HMAC-SHA1 with auth token, base64 encoded
+  const hmac = crypto.createHmac('sha1', TWILIO_AUTH_TOKEN!);
+  hmac.update(data);
+  return hmac.digest('base64');
+}
+
+/**
+ * Constant-time string comparison to prevent timing attacks
+ */
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
+// =============================================================================
+// Webhook Body Parsing
+// =============================================================================
+
+/**
+ * Parse the body of a Twilio webhook request
+ *
+ * Twilio sends data as application/x-www-form-urlencoded
+ *
+ * @param request - The incoming NextRequest
+ * @returns Parsed body as a Record<string, string>
+ */
+export async function parseTwilioWebhookBody(
+  request: NextRequest
+): Promise<Record<string, string>> {
+  const contentType = request.headers.get('content-type') || '';
+
+  if (contentType.includes('application/x-www-form-urlencoded')) {
+    const formData = await request.formData();
+    const body: Record<string, string> = {};
+
+    formData.forEach((value, key) => {
+      body[key] = value.toString();
+    });
+
+    return body;
+  }
+
+  // Fallback: try to parse as JSON (for testing)
+  try {
+    return await request.json();
+  } catch {
+    return {};
+  }
 }
 
 // =============================================================================
@@ -129,217 +152,97 @@ export async function validateTwilioSignature(
 // =============================================================================
 
 /**
- * Generate a simple TwiML response that speaks a message.
+ * Generate a simple TwiML response with a spoken message
  *
  * @param message - The message to speak
- * @param options - Optional TwiML configuration
  * @returns TwiML XML string
  */
-export function generateTwiMLResponse(
-  message: string,
-  options: TwiMLOptions = {}
-): string {
-  const VoiceResponse = twilio.twiml.VoiceResponse;
-  const response = new VoiceResponse();
-
-  // Add the spoken message
-  response.say(
-    {
-      voice: options.voice || "Polly.Matthew",
-      language: options.language || "en-US",
-    },
-    message
-  );
-
-  return response.toString();
+export function generateTwiMLResponse(message: string): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="alice">${escapeXml(message)}</Say>
+</Response>`;
 }
 
 /**
- * Generate TwiML that connects to a WebSocket for real-time media streaming.
+ * Generate TwiML that connects to a WebSocket for real-time streaming
  *
  * @param websocketUrl - The WebSocket URL to connect to
- * @param options - Optional TwiML configuration
  * @returns TwiML XML string
  */
-export function generateStreamTwiML(
-  websocketUrl: string,
-  options: TwiMLOptions = {}
-): string {
-  const VoiceResponse = twilio.twiml.VoiceResponse;
-  const response = new VoiceResponse();
-
-  // Start bidirectional media stream
-  const connect = response.connect();
-  connect.stream({
-    url: websocketUrl,
-  });
-
-  // Add recording if requested
-  if (options.record) {
-    response.record({
-      recordingStatusCallback: options.statusCallback || `${APP_URL}/api/twilio/recording`,
-      recordingStatusCallbackEvent: ["completed", "absent"] as unknown as string,
-    });
-  }
-
-  return response.toString();
+export function generateStreamTwiML(websocketUrl: string): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Connect>
+    <Stream url="${escapeXml(websocketUrl)}" />
+  </Connect>
+</Response>`;
 }
 
 /**
- * Generate TwiML that speaks a greeting then connects to a WebSocket.
- * This is the primary TwiML response for incoming scam calls.
+ * Generate TwiML that plays a greeting then connects to WebSocket
  *
- * @param greeting - The greeting message Earl speaks
- * @param websocketUrl - The WebSocket URL for real-time voice streaming
- * @param options - Optional TwiML configuration
+ * @param greeting - Initial greeting message
+ * @param websocketUrl - The WebSocket URL for streaming
  * @returns TwiML XML string
  */
 export function generateGreetingAndStreamTwiML(
   greeting: string,
-  websocketUrl: string,
-  options: TwiMLOptions = {}
+  websocketUrl: string
 ): string {
-  const VoiceResponse = twilio.twiml.VoiceResponse;
-  const response = new VoiceResponse();
-
-  // Speak Earl's greeting
-  response.say(
-    {
-      voice: options.voice || "Polly.Matthew",
-      language: options.language || "en-US",
-    },
-    greeting
-  );
-
-  // Start bidirectional media stream for real-time AI conversation
-  const connect = response.connect({
-    action: options.statusCallback || `${APP_URL}/api/twilio/status`,
-  });
-  connect.stream({
-    url: websocketUrl,
-  });
-
-  // Add a pause at the end so the call doesn't disconnect
-  response.pause({ length: 3600 }); // 1 hour max
-
-  return response.toString();
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="alice">${escapeXml(greeting)}</Say>
+  <Connect>
+    <Stream url="${escapeXml(websocketUrl)}" />
+  </Connect>
+</Response>`;
 }
 
 /**
- * Generate a fallback TwiML response for error scenarios.
- * This ensures callers hear something even if the system fails.
+ * Generate TwiML to hang up with an optional message
  *
- * @returns TwiML XML string with a friendly error message
+ * @param message - Optional farewell message
+ * @returns TwiML XML string
+ */
+export function generateHangupTwiML(message?: string): string {
+  if (message) {
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="alice">${escapeXml(message)}</Say>
+  <Hangup />
+</Response>`;
+  }
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Hangup />
+</Response>`;
+}
+
+/**
+ * Generate fallback TwiML for error scenarios
+ *
+ * @returns TwiML XML string
  */
 export function generateFallbackTwiML(): string {
-  const VoiceResponse = twilio.twiml.VoiceResponse;
-  const response = new VoiceResponse();
-
-  response.say(
-    {
-      voice: "Polly.Matthew",
-      language: "en-US",
-    },
-    "Well now, I seem to have gotten myself a bit confused here. You'll have to excuse me, my hearing aid's been acting up. Give me a call back in a little bit, would ya?"
-  );
-
-  response.hangup();
-
-  return response.toString();
-}
-
-// =============================================================================
-// Call Details Fetching
-// =============================================================================
-
-/**
- * Details about a Twilio call
- */
-export interface TwilioCallDetails {
-  sid: string;
-  from: string;
-  to: string;
-  status: string;
-  direction: string;
-  duration: string | null;
-  startTime: Date | null;
-  endTime: Date | null;
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="alice">I'm sorry, we're experiencing technical difficulties. Please try again later.</Say>
+  <Hangup />
+</Response>`;
 }
 
 /**
- * Fetch details about a specific call from Twilio.
- *
- * @param callSid - The Twilio call SID
- * @returns Call details
+ * Escape special characters for XML
  */
-export async function getCallDetails(
-  callSid: string
-): Promise<TwilioCallDetails> {
-  const client = getTwilioClient();
-
-  try {
-    const call = await client.calls(callSid).fetch();
-
-    return {
-      sid: call.sid,
-      from: call.from,
-      to: call.to,
-      status: call.status,
-      direction: call.direction,
-      duration: call.duration,
-      startTime: call.startTime,
-      endTime: call.endTime,
-    };
-  } catch (error) {
-    throw new TwilioClientError(
-      `Failed to fetch call details for ${callSid}`,
-      "CALL_FETCH_FAILED",
-      error instanceof Error ? error : undefined
-    );
-  }
-}
-
-/**
- * Details about a Twilio recording
- */
-export interface TwilioRecordingDetails {
-  sid: string;
-  callSid: string;
-  duration: string;
-  status: string;
-  uri: string;
-  mediaUrl: string;
-}
-
-/**
- * Fetch details about a specific recording from Twilio.
- *
- * @param recordingSid - The Twilio recording SID
- * @returns Recording details
- */
-export async function getRecording(
-  recordingSid: string
-): Promise<TwilioRecordingDetails> {
-  const client = getTwilioClient();
-
-  try {
-    const recording = await client.recordings(recordingSid).fetch();
-
-    return {
-      sid: recording.sid,
-      callSid: recording.callSid,
-      duration: recording.duration,
-      status: recording.status,
-      uri: recording.uri,
-      mediaUrl: `https://api.twilio.com${recording.uri.replace(".json", ".wav")}`,
-    };
-  } catch (error) {
-    throw new TwilioClientError(
-      `Failed to fetch recording details for ${recordingSid}`,
-      "RECORDING_FETCH_FAILED",
-      error instanceof Error ? error : undefined
-    );
-  }
+function escapeXml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
 }
 
 // =============================================================================
@@ -347,83 +250,96 @@ export async function getRecording(
 // =============================================================================
 
 /**
- * Format a phone number to E.164 format.
- * Handles common US phone number formats.
+ * Format a phone number to E.164 format
  *
- * @param phoneNumber - The phone number to format
- * @returns E.164 formatted phone number
+ * @param phoneNumber - Phone number in any format
+ * @returns E.164 formatted number (e.g., +15551234567)
  */
 export function formatPhoneNumber(phoneNumber: string): string {
-  // Remove all non-digit characters
-  const digits = phoneNumber.replace(/\D/g, "");
+  // Remove all non-digit characters except leading +
+  let cleaned = phoneNumber.replace(/[^\d+]/g, '');
 
-  // Handle US numbers
-  if (digits.length === 10) {
-    return `+1${digits}`;
+  // If starts with +, keep it
+  if (cleaned.startsWith('+')) {
+    return cleaned;
   }
 
-  // Already has country code
-  if (digits.length === 11 && digits.startsWith("1")) {
-    return `+${digits}`;
+  // If 10 digits (US), add +1
+  if (cleaned.length === 10) {
+    return `+1${cleaned}`;
   }
 
-  // Return as-is if it's already in a valid format
-  if (phoneNumber.startsWith("+")) {
-    return phoneNumber;
+  // If 11 digits starting with 1 (US), add +
+  if (cleaned.length === 11 && cleaned.startsWith('1')) {
+    return `+${cleaned}`;
   }
 
-  // Default: just add + prefix
-  return `+${digits}`;
+  // Otherwise, just add + prefix
+  return `+${cleaned}`;
 }
 
 /**
- * Validate that a string is a valid phone number.
- * Accepts E.164 format and common US formats.
+ * Format phone number for display
  *
- * @param phoneNumber - The phone number to validate
- * @returns True if valid, false otherwise
+ * @param phoneNumber - Phone number in E.164 or other format
+ * @returns Human-readable format (e.g., "(555) 123-4567")
  */
-export function isValidPhoneNumber(phoneNumber: string): boolean {
-  // E.164 format: + followed by 1-15 digits
-  const e164Pattern = /^\+[1-9]\d{1,14}$/;
+export function formatPhoneNumberForDisplay(phoneNumber: string): string {
+  // Remove non-digits
+  const digits = phoneNumber.replace(/\D/g, '');
 
-  // Try E.164 first
-  if (e164Pattern.test(phoneNumber)) {
-    return true;
+  // Handle US numbers (10 or 11 digits)
+  if (digits.length === 10) {
+    return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
   }
 
-  // Check if it can be formatted to E.164
-  const formatted = formatPhoneNumber(phoneNumber);
-  return e164Pattern.test(formatted);
+  if (digits.length === 11 && digits.startsWith('1')) {
+    return `(${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7)}`;
+  }
+
+  // For other formats, return as-is with + prefix
+  return phoneNumber.startsWith('+') ? phoneNumber : `+${digits}`;
 }
+
+/**
+ * Validate if a string is a valid phone number
+ *
+ * @param phoneNumber - Phone number to validate
+ * @returns true if valid, false otherwise
+ */
+export function isValidPhoneNumber(phoneNumber: string): boolean {
+  const digits = phoneNumber.replace(/\D/g, '');
+  // Accept 10-15 digits (international range)
+  return digits.length >= 10 && digits.length <= 15;
+}
+
+// =============================================================================
+// Configuration Getters
+// =============================================================================
 
 /**
  * Get the configured Twilio phone number
- *
- * @returns The configured Twilio phone number or undefined
  */
-export function getTwilioPhoneNumber(): string | undefined {
+export function getPhoneNumber(): string {
+  if (!TWILIO_PHONE_NUMBER) {
+    throw new Error('TWILIO_PHONE_NUMBER environment variable not set');
+  }
   return TWILIO_PHONE_NUMBER;
 }
 
-// =============================================================================
-// Webhook Payload Type Guards
-// =============================================================================
+/**
+ * Get the Twilio Account SID
+ */
+export function getAccountSid(): string {
+  if (!TWILIO_ACCOUNT_SID) {
+    throw new Error('TWILIO_ACCOUNT_SID environment variable not set');
+  }
+  return TWILIO_ACCOUNT_SID;
+}
 
 /**
- * Type guard to check if a payload is a valid TwilioWebhookPayload
- *
- * @param payload - The payload to check
- * @returns True if the payload is a valid TwilioWebhookPayload
+ * Check if Twilio is properly configured
  */
-export function isTwilioWebhookPayload(
-  payload: Record<string, string>
-): payload is Record<string, string> & TwilioWebhookPayload {
-  return (
-    typeof payload.CallSid === "string" &&
-    typeof payload.AccountSid === "string" &&
-    typeof payload.From === "string" &&
-    typeof payload.To === "string" &&
-    typeof payload.CallStatus === "string"
-  );
+export function isTwilioConfigured(): boolean {
+  return !!(TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN && TWILIO_PHONE_NUMBER);
 }

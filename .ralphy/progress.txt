@@ -1,125 +1,77 @@
 # Ralphy Progress Log
 
-## Task: Create Incoming Call Webhook Handler
+## Task: Create Call Status Webhook Handler (Agent 9)
 
-### Date: 2026-01-19
+### Completed: 2026-01-19
 
-### Summary
-Implemented the Twilio incoming call webhook handler (`/api/twilio/incoming`) which serves as the entry point for all incoming scam calls to the ScamScrammer system.
+#### Summary
+Implemented the Call Status Webhook Handler that receives status update callbacks from Twilio throughout the call lifecycle. The handler updates call records in the database based on status transitions.
 
-### Files Created
+#### Files Created
 
-#### Core Implementation
-- `src/app/api/twilio/incoming/route.ts` - Main webhook handler
-  - POST handler for incoming Twilio calls
-  - Validates Twilio signature for security
-  - Creates call records in database with RINGING status
-  - Returns TwiML response with Earl's greeting and WebSocket stream connection
-  - Includes fallback TwiML for error scenarios
-  - OPTIONS handler for CORS preflight
+1. **src/types/index.ts**
+   - TypeScript interfaces for Twilio webhook payloads (TwilioStatusPayload, TwilioWebhookPayload, TwilioRecordingPayload)
+   - CallStatus and Speaker enums matching Prisma schema
+   - TWILIO_STATUS_MAP constant for mapping Twilio statuses to internal statuses
+   - mapTwilioStatusToCallStatus() utility function
+   - API response types (CallResponse, CallSegmentResponse, DashboardStats, etc.)
 
-#### Supporting Infrastructure (Prerequisites)
-- `package.json` - Project dependencies (Next.js, Twilio, Prisma, etc.)
-- `tsconfig.json` - TypeScript configuration with strict mode
-- `next.config.ts` - Next.js configuration with CORS headers for Twilio webhooks
-- `jest.config.js` - Jest test configuration
-- `.env.example` - Environment variable template
+2. **prisma/schema.prisma**
+   - Call model with all required fields (twilioSid, fromNumber, toNumber, status, duration, etc.)
+   - CallSegment model for conversation transcripts
+   - CallStatus enum (RINGING, IN_PROGRESS, COMPLETED, FAILED, NO_ANSWER)
+   - Speaker enum (SCAMMER, EARL)
+   - Appropriate indexes for performance
 
-#### Type Definitions
-- `src/types/index.ts` - Complete TypeScript interfaces including:
-  - TwilioWebhookPayload, TwilioStatusPayload, TwilioRecordingPayload
-  - CallStatus and Speaker enums
-  - API response types (CallResponse, CallListResponse)
-  - OpenAI Realtime API types
-  - Earl persona configuration types
-  - Storage and TwiML types
+3. **src/lib/db.ts**
+   - Prisma client singleton to prevent multiple connections during hot reloads
+   - connectDb() and disconnectDb() helpers for health checks and testing
 
-#### Library Modules
-- `src/lib/db.ts` - Prisma client singleton
-- `src/lib/twilio.ts` - Twilio SDK wrapper with:
-  - Signature validation (validateTwilioSignature)
-  - TwiML generation (generateGreetingAndStreamTwiML, generateFallbackTwiML)
-  - Phone number formatting utilities
-  - Webhook payload type guards
-- `src/lib/persona.ts` - Earl AI persona configuration with:
-  - Complete system prompt for OpenAI
-  - Tangent topics, mishearings, signature phrases
-  - Helper functions (getEarlGreeting, getMishearing, etc.)
+4. **src/lib/twilio.ts**
+   - validateTwilioSignature() - Validates webhook requests using Twilio's signature
+   - parseTwilioWebhookBody() - Parses form-encoded webhook data
+   - TwiML generation helpers (generateTwiMLResponse, generateStreamTwiML, etc.)
+   - Phone number utilities (formatPhoneNumber, formatPhoneNumberForDisplay, isValidPhoneNumber)
 
-#### Database Schema
-- `prisma/schema.prisma` - PostgreSQL schema with:
-  - Call model (twilioSid, fromNumber, toNumber, status, duration, etc.)
-  - CallSegment model (speaker, text, timestamp)
-  - CallStatus and Speaker enums
+5. **src/app/api/twilio/status/route.ts** (Main deliverable)
+   - POST handler for Twilio status callbacks
+   - Validates Twilio signature for security
+   - Maps Twilio statuses to internal CallStatus enum:
+     - queued/ringing -> RINGING
+     - in-progress/answered -> IN_PROGRESS
+     - completed -> COMPLETED (with duration)
+     - busy/failed/canceled -> FAILED
+     - no-answer -> NO_ANSWER
+   - Updates call records in database
+   - Handles terminal state idempotency (won't update already-completed calls)
+   - Parses and validates duration from completed calls
+   - Returns appropriate error responses for invalid requests
+   - Rejects non-POST methods with 405
 
-### Files created/modified:
-- `scamscrammer/prisma/schema.prisma` - Database schema with Call, CallSegment models and enums
-- `scamscrammer/prisma.config.ts` - Prisma 7 configuration
-- `scamscrammer/src/lib/db.ts` - Prisma client singleton
-- `scamscrammer/src/types/index.ts` - TypeScript type definitions
-- `scamscrammer/src/app/api/stats/route.ts` - Stats API endpoint
-- `scamscrammer/src/app/api/stats/__tests__/route.test.ts` - API tests
-- `scamscrammer/jest.config.mjs` - Jest configuration
-- `scamscrammer/jest.setup.js` - Jest setup
-- `scamscrammer/package.json` - Added test scripts and dependencies
+6. **Test Files**
+   - src/app/api/twilio/status/__tests__/route.test.ts (40+ tests)
+   - src/types/__tests__/index.test.ts
+   - src/lib/__tests__/twilio.test.ts
 
----
+7. **Configuration Files**
+   - package.json - Dependencies and scripts
+   - tsconfig.json - TypeScript configuration with path aliases
+   - jest.config.js - Jest testing configuration
+   - .env.example - Environment variables template
 
-## Task: Create Incoming Call Webhook Handler
+#### Key Features
+- Secure webhook validation using Twilio signature verification
+- Idempotent status updates (won't regress terminal states)
+- Proper error handling with appropriate HTTP status codes
+- Duration parsing and validation for completed calls
+- Comprehensive test coverage
 
-**Status:** Completed
-**Date:** 2026-01-19
-
-### What was done:
-
-1. **Created Twilio client wrapper**
-   - Created `src/lib/twilio.ts` with:
-     - Lazy-initialized Twilio client getter
-     - Twilio request signature validation helpers
-     - TwiML generation functions (createStreamingTwiml, createSimpleTwiml, createErrorTwiml)
-     - TypeScript interfaces for Twilio webhook parameters (TwilioIncomingCallParams, TwilioStatusCallbackParams)
-   - Installed `twilio` package as dependency
-
-2. **Created Earl persona configuration**
-   - Created `src/lib/persona.ts` with:
-     - EARL_GREETING - Initial greeting message for incoming calls
-     - EARL_SYSTEM_PROMPT - Full AI persona system prompt for OpenAI
-     - TANGENT_TOPICS - Array of Earl's favorite conversation tangents
-     - MISHEARINGS - Dictionary of common words Earl mishears
-     - SIGNATURE_PHRASES - Earl's favorite expressions
-     - Helper functions: getRandomPhrase(), getRandomTangent()
-
-3. **Implemented incoming call webhook handler**
-   - Created `src/app/api/twilio/incoming/route.ts` with POST handler that:
-     - Parses form data from Twilio webhook requests
-     - Validates Twilio signature for security (skipped in development mode)
-     - Creates Call record in database with RINGING status
-     - Handles duplicate call SIDs gracefully (webhook idempotency)
-     - Returns TwiML response with Earl's greeting and WebSocket stream URL
-     - Returns error TwiML on failures (so calls are still answered)
-   - Builds WebSocket URL from NEXT_PUBLIC_APP_URL or request host
-
-4. **Created TypeScript configuration**
-   - Created `tsconfig.json` (was missing from project)
-   - Configured path aliases (@/*) for clean imports
-   - Set up Next.js-compatible TypeScript settings
-
-5. **Wrote comprehensive tests**
-   - Created `src/app/api/twilio/incoming/__tests__/route.test.ts` with 8 tests:
-     - Handles incoming call and returns TwiML response
-     - Returns error TwiML when required parameters are missing
-     - Handles duplicate call SID gracefully
-     - Returns 403 for invalid Twilio signature in production
-     - Skips signature validation in development mode
-     - Uses configured app URL for stream URL in production
-     - Returns error TwiML on unexpected errors
-     - Logs call details for debugging
-   - All 8 tests passing
-
-### Files created/modified:
-- `scamscrammer/src/lib/twilio.ts` - Twilio client wrapper and TwiML helpers
-- `scamscrammer/src/lib/persona.ts` - Earl AI persona configuration
-- `scamscrammer/src/app/api/twilio/incoming/route.ts` - Incoming call webhook handler
-- `scamscrammer/src/app/api/twilio/incoming/__tests__/route.test.ts` - Webhook tests (8 tests)
-- `scamscrammer/tsconfig.json` - TypeScript configuration
-- `scamscrammer/package.json` - Added twilio dependency
+#### Test Coverage
+- Valid status updates for all 8 Twilio statuses
+- Invalid signature rejection (403)
+- Missing required fields (400)
+- Call not found handling (200 with warning)
+- Terminal state protection
+- Duration parsing edge cases
+- HTTP method restrictions (405 for non-POST)
+- Error handling for database failures

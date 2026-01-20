@@ -1,5 +1,5 @@
-// Prisma Schema for ScamScrammer
-// This schema defines the database models for tracking scam calls
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
 
 generator client {
   provider = "prisma-client-js"
@@ -10,33 +10,25 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-/// A record of an incoming scam call handled by Earl
-model Call {
-  id            String     @id @default(cuid())
-  /// Twilio's unique call identifier
-  twilioSid     String     @unique
-  /// Caller's phone number (E.164 format)
-  fromNumber    String
-  /// Our Twilio phone number (E.164 format)
-  toNumber      String
-  /// Current status of the call
-  status        CallStatus @default(RINGING)
-  /// Duration of the call in seconds
-  duration      Int?
-  /// S3 URL for the call recording
-  recordingUrl  String?
-  /// S3 URL for the transcript file
-  transcriptUrl String?
-  /// Entertainment value rating (1-5 stars)
-  rating        Int?
-  /// User notes about the call
-  notes         String?
-  /// When the call was received
-  createdAt     DateTime   @default(now())
-  /// Last update timestamp
-  updatedAt     DateTime   @updatedAt
+// =============================================================================
+// Call Model - Main record for each intercepted call
+// =============================================================================
 
-  /// Conversation segments (transcribed dialogue)
+model Call {
+  id            String      @id @default(cuid())
+  twilioSid     String      @unique // Twilio Call SID for linking webhooks
+  fromNumber    String      // Caller's phone number (E.164 format)
+  toNumber      String      // Our Twilio phone number
+  status        CallStatus  @default(RINGING)
+  duration      Int?        // Call duration in seconds (set when completed)
+  recordingUrl  String?     // S3 URL for the recording
+  transcriptUrl String?     // S3 URL for the transcript
+  rating        Int?        // 1-5 star rating for entertainment value
+  notes         String?     // User notes about the call
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  // Relation to conversation segments
   segments CallSegment[]
 
   @@index([status])
@@ -44,42 +36,36 @@ model Call {
   @@index([fromNumber])
 }
 
-/// A segment of conversation from a call
+// =============================================================================
+// CallSegment Model - Individual conversation turns
+// =============================================================================
+
 model CallSegment {
   id        String   @id @default(cuid())
-  /// Reference to the parent call
   callId    String
   call      Call     @relation(fields: [callId], references: [id], onDelete: Cascade)
-  /// Who spoke this segment
-  speaker   Speaker
-  /// Transcribed text content
-  text      String
-  /// Seconds into the call when this was spoken
-  timestamp Int
-  /// When this segment was created
+  speaker   Speaker  // Who said this (SCAMMER or EARL)
+  text      String   // Transcribed text content
+  timestamp Int      // Seconds into the call when this was said
   createdAt DateTime @default(now())
 
   @@index([callId])
+  @@index([timestamp])
 }
 
-/// Status of a call in the system
+// =============================================================================
+// Enums
+// =============================================================================
+
 enum CallStatus {
-  /// Call is ringing, not yet answered
-  RINGING
-  /// Call is in progress with Earl
-  IN_PROGRESS
-  /// Call completed successfully
-  COMPLETED
-  /// Call failed (error or disconnection)
-  FAILED
-  /// Call was not answered
-  NO_ANSWER
+  RINGING     // Initial state when call comes in
+  IN_PROGRESS // Call has been answered
+  COMPLETED   // Call ended normally
+  FAILED      // Call failed (busy, error, etc.)
+  NO_ANSWER   // Caller didn't answer (for outbound) or hung up before answer
 }
 
-/// Speaker in a conversation segment
 enum Speaker {
-  /// The scam caller
-  SCAMMER
-  /// Our AI persona Earl
-  EARL
+  SCAMMER // The caller (presumably a scammer)
+  EARL    // Our AI persona
 }
