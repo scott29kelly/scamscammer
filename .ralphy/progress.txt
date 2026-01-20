@@ -1,75 +1,94 @@
 # Ralphy Progress Log
 
-## Task: Create Calls REST API Endpoints
+## Task: Add Authentication and Route Protection
 
-### Date: 2026-01-19
+**Status:** Completed
+**Date:** 2026-01-19
 
-### Summary
-Implemented the Calls REST API endpoints for the ScamScrammer project, enabling CRUD operations for call history management.
+### What was done:
 
-### Changes Made
+1. **Created authentication utilities module**
+   - Created `src/lib/auth.ts` with:
+     - Password validation using `DASHBOARD_PASSWORD` environment variable
+     - Session token generation with timestamp and password hash
+     - Session validation with 7-day expiration
+     - Cookie-based session management (httpOnly, secure in production)
+     - Route protection helpers (`isProtectedRoute`, `isLoginRoute`, `isApiRoute`)
+     - Request authentication checking for middleware
 
-1. **Project Foundation Setup**
-   - Initialized Next.js 14+ project with TypeScript and Tailwind CSS
-   - Configured Prisma ORM with PostgreSQL schema
-   - Created project directory structure following the plan
+2. **Created login page**
+   - Created `src/app/login/page.tsx` React client component
+   - Dark theme UI matching the dashboard design
+   - Form with password input and submit button
+   - Loading state and error handling
+   - Redirect to `/calls` after successful login
+   - Uses fetch API to call login endpoint
 
-2. **Database Schema** (`prisma/schema.prisma`)
-   - Created `Call` model with fields: id, twilioSid, fromNumber, toNumber, status, duration, recordingUrl, transcriptUrl, rating, notes, tags
-   - Created `CallSegment` model for transcript segments
-   - Defined `CallStatus` enum (RINGING, IN_PROGRESS, COMPLETED, FAILED, NO_ANSWER)
-   - Defined `Speaker` enum (SCAMMER, EARL)
-   - Added cascade delete for segments when call is deleted
+3. **Created authentication API routes**
+   - Created `src/app/api/auth/login/route.ts`:
+     - POST handler to authenticate with password
+     - Returns 400 for missing password
+     - Returns 401 for invalid password
+     - Returns 200 and creates session for valid password
+     - Proper error handling with 500 response on failure
+   - Created `src/app/api/auth/logout/route.ts`:
+     - POST handler to clear authentication session
+     - Destroys session cookie
 
-3. **Database Client** (`src/lib/db.ts`)
-   - Implemented Prisma client singleton pattern to prevent multiple instances during development
+4. **Created Next.js middleware for route protection**
+   - Created `src/middleware.ts` with:
+     - Protection for `/calls/*` and `/api/calls/*` routes
+     - JSON 401 response for unauthorized API requests
+     - Redirect to `/login` for unauthorized page requests
+     - Preserves redirect URL in query parameter
+     - Does NOT protect Twilio webhooks (`/api/twilio/*`, `/api/voice/*`)
+     - Does NOT protect public routes (`/api/stats`, `/api/health`, `/api/auth/*`)
 
-4. **TypeScript Types** (`src/types/index.ts`)
-   - Created API response types (CallResponse, CallListItem, CallListResponse)
-   - Created pagination types (PaginationInfo)
-   - Created request types (CallListQueryParams, CallUpdatePayload)
-   - Created error response type (ApiErrorResponse)
+5. **Added authentication environment variables**
+   - Created `.env.example` with `DASHBOARD_PASSWORD` variable
+   - Includes all other expected environment variables documented
 
-5. **Calls List API** (`src/app/api/calls/route.ts`)
-   - GET endpoint for listing calls with:
-     - Pagination (page, limit parameters)
-     - Filtering by status (CallStatus enum)
-     - Filtering by date range (startDate, endDate)
-     - Sorting (sortBy: createdAt | duration, sortOrder: asc | desc)
-     - Includes segment count for each call
+6. **Created TypeScript configuration**
+   - Created `tsconfig.json` with path alias support (`@/*` -> `./src/*`)
+   - Configured for Next.js App Router with strict mode
 
-6. **Individual Call API** (`src/app/api/calls/[id]/route.ts`)
-   - GET: Retrieve single call with all segments (ordered by timestamp)
-   - PATCH: Update call rating (1-5), notes (string), tags (string[])
-     - Includes validation for rating range
-     - Returns validation errors with details
-   - DELETE: Remove call and associated data
-     - Uses cascade delete for segments
-     - Placeholder for S3 recording deletion (to be implemented with storage service)
+7. **Created comprehensive tests**
+   - Created `src/lib/__tests__/auth.test.ts` (19 test cases):
+     - Password validation tests (correct/incorrect/missing/empty)
+     - Session token generation tests
+     - Session validation tests (empty/malformed/expired/valid/wrong hash)
+     - Route protection pattern tests
+     - Login route detection tests
+     - API route detection tests
+   - Created `src/app/api/auth/login/__tests__/route.test.ts` (4 test cases):
+     - Missing password returns 400
+     - Invalid password returns 401
+     - Valid password returns 200 and creates session
+     - Session creation failure returns 500
+   - All 23 tests pass
 
-7. **Tests** (`src/__tests__/api/calls.test.ts`)
-   - 18 comprehensive tests covering:
-     - List endpoint with pagination, filtering, sorting
-     - Single call retrieval
-     - Call updates with validation
-     - Call deletion
-     - Error handling scenarios
+### Files created:
+- `scamscrammer/src/lib/auth.ts` - Authentication utilities module
+- `scamscrammer/src/app/login/page.tsx` - Login page component
+- `scamscrammer/src/app/api/auth/login/route.ts` - Login API endpoint
+- `scamscrammer/src/app/api/auth/logout/route.ts` - Logout API endpoint
+- `scamscrammer/src/middleware.ts` - Route protection middleware
+- `scamscrammer/.env.example` - Environment variables template
+- `scamscrammer/tsconfig.json` - TypeScript configuration
+- `scamscrammer/src/lib/__tests__/auth.test.ts` - Auth module tests
+- `scamscrammer/src/app/api/auth/login/__tests__/route.test.ts` - Login route tests
 
-### Files Created/Modified
-- `scamscrammer/` - New Next.js project directory
-- `scamscrammer/prisma/schema.prisma` - Database schema
-- `scamscrammer/src/lib/db.ts` - Database client
-- `scamscrammer/src/types/index.ts` - TypeScript types
-- `scamscrammer/src/app/api/calls/route.ts` - List API endpoint
-- `scamscrammer/src/app/api/calls/[id]/route.ts` - Individual call endpoints
-- `scamscrammer/src/__tests__/api/calls.test.ts` - API tests
-- `scamscrammer/jest.config.mjs` - Jest configuration
-- `scamscrammer/jest.setup.js` - Jest setup
-- `scamscrammer/package.json` - Added test scripts and dependencies
+### Security considerations:
+- Session cookies are httpOnly (not accessible via JavaScript)
+- Secure flag enabled in production (HTTPS only)
+- SameSite=lax for CSRF protection
+- 7-day session expiration
+- Twilio webhooks remain unprotected (use Twilio signature validation instead)
+- Simple password-based auth as specified (MVP level)
 
 ---
 
-## Task: Create Call List Component and Page
+## Task: Create Stats API Endpoint
 
 **Status:** Completed
 **Date:** 2026-01-19
