@@ -1,240 +1,66 @@
 # Ralphy Progress Log
 
-## Task: Implement OpenAI Realtime Voice Client (agent-6)
+## 2026-01-19: Implement Storage Service for Recordings
 
-### Completed: 2026-01-19
+### Completed Tasks
 
-### Summary
-Implemented the OpenAI Realtime Voice Client for real-time AI voice conversations with the Earl persona. This client enables bidirectional audio streaming via WebSocket to the OpenAI Realtime API.
+1. **Created project structure**
+   - Set up src/lib, src/types, and src/app directories
+   - Created package.json with dependencies (Next.js 14, AWS SDK S3, Jest)
+   - Created tsconfig.json with TypeScript strict mode and path aliases
 
-### Changes Made
+2. **Created TypeScript type definitions** (`src/types/index.ts`)
+   - StoragePaginationOptions interface
+   - RecordingMetadata interface
+   - StorageListResult interface
+   - StorageConfig interface
+   - UploadResult interface
+   - StorageErrorCode enum
+   - Result and AsyncResult utility types
 
-#### New Files
-- `src/lib/openai.ts` - OpenAI Realtime Voice Client implementation
-- `src/lib/__tests__/openai.test.ts` - Comprehensive test suite (53 tests)
+3. **Implemented StorageClient class** (`src/lib/storage.ts`)
+   Core methods:
+   - `uploadRecording(callId, audioBuffer, contentType?)` - Upload audio to S3
+   - `getRecordingUrl(callId, expiresIn?)` - Generate signed URLs for playback
+   - `deleteRecording(callId)` - Remove recordings from S3
+   - `listRecordings(options?)` - List recordings with pagination support
+   - `generateStorageKey(callId, date?)` - Consistent S3 key naming
 
-#### Modified Files
-- `package.json` - Added openai and ws dependencies
-- `src/types/index.ts` - Added missing OpenAI Realtime event type
+   Additional methods:
+   - `getRecordingUrlByKey(key, expiresIn?)` - Get URL by S3 key
+   - `deleteRecordingByKey(key)` - Delete by S3 key
+   - `recordingExists(callId)` - Check if recording exists
+   - `getRecordingMetadata(callId)` - Get recording metadata
+   - `downloadRecording(callId)` - Download as Buffer
 
-### Implementation Details
+   Features:
+   - Singleton pattern with getStorageClient() and resetStorageClient()
+   - Environment variable support for AWS credentials
+   - Custom StorageError class with error codes
+   - Comprehensive error handling (quota exceeded, access denied, not found)
+   - S3 key format: recordings/{YYYY-MM-DD}/{callId}.wav
 
-#### OpenAIRealtimeClient Class
-The main client class provides:
-- **connect(options)** - Establishes WebSocket connection to OpenAI Realtime API
-- **sendAudio(audioChunk)** - Streams audio data (Buffer or base64) to OpenAI
-- **onResponse(callback)** - Unified callback for audio and transcript responses
-- **disconnect(reason)** - Clean shutdown with event emission
-- **setSystemPrompt(prompt)** - Configure or update persona instructions
+4. **Created comprehensive unit tests** (`src/lib/__tests__/storage.test.ts`)
+   - 38 passing tests covering:
+     - Constructor configuration validation
+     - Key generation and extraction
+     - Upload, download, delete operations
+     - Listing with pagination
+     - Error handling for all error types
+     - Singleton behavior
+     - StorageError class
 
-#### Additional Methods
-- **commitAudioBuffer()** - Manual turn detection trigger
-- **clearAudioBuffer()** - Clear pending audio without response
-- **createResponse()** - Manually trigger model response
-- **cancelResponse()** - Cancel in-progress response
-- **updateSession(config)** - Update session parameters live
-- **addConversationItem(item)** - Inject messages into conversation
-
-#### Event Handlers
-- **audio** - Receives audio chunks from model responses
-- **transcript** - Receives transcript deltas (partial and final)
-- **error** - Error events with retryability information
-- **disconnect** - Connection termination events
-- **stateChange** - Connection state transitions
-- **sessionCreated** - Session initialization confirmation
-- **inputTranscript** - Transcription of user speech
-- **speechStarted/speechStopped** - Voice activity detection
-- **responseComplete** - Full response completion
-- **rawEvent** - All raw API events for advanced handling
-
-#### Connection Features
-- Automatic reconnection with exponential backoff
-- Connection timeout handling (30 seconds)
-- Max 5 reconnection attempts
-- State management (disconnected/connecting/connected/reconnecting/error)
-- Pending message queue for reliability
-
-#### Factory Functions
-- **createEarlClient(apiKey)** - Pre-configured for Earl persona with:
-  - 'echo' voice (lower male voice for elderly character)
-  - Higher temperature (0.9) for varied responses
-  - Longer silence detection (800ms) for elderly speech patterns
-  - EARL_SYSTEM_PROMPT loaded automatically
-
-- **createRealtimeClient(apiKey, config)** - Basic client with custom config
-
-### Configuration
-- Model: gpt-4o-realtime-preview-2024-10-01
-- Default audio format: g711_ulaw (Twilio compatible)
-- Server VAD turn detection enabled
-- Input audio transcription via Whisper
+### Files Created/Modified
+- `package.json` (new)
+- `tsconfig.json` (new)
+- `jest.config.js` (new)
+- `src/types/index.ts` (new)
+- `src/lib/storage.ts` (new)
+- `src/lib/__tests__/storage.test.ts` (new)
 
 ### Dependencies Added
-- openai: ^4.77.0
-- ws: ^8.18.0
-- @types/ws: ^8.5.13 (dev)
-
-### Tests
-53 tests covering:
-- Constructor and configuration
-- Connection lifecycle
-- Audio streaming
-- Event handling
-- Session management
-- Reconnection logic
-- Error handling
-- Factory functions
-
-3. **Added TypeScript type definitions**
-   - Updated `src/types/index.ts` with:
-     - Re-exported Prisma types (Call, CallSegment, CallStatus, Speaker)
-     - ApiErrorResponse interface
-     - PaginationInfo interface
-     - CallListItem interface
-     - CallListResponse interface
-     - CallResponse interface
-     - DashboardStats interface
-
-4. **Implemented Stats API endpoint**
-   - Created `src/app/api/stats/route.ts` with GET handler
-   - Returns comprehensive dashboard statistics:
-     - `totalCalls` - total number of calls
-     - `totalDuration` - sum of all call durations (seconds)
-     - `averageDuration` - average call duration (rounded)
-     - `callsByStatus` - count per status (RINGING, IN_PROGRESS, COMPLETED, FAILED, NO_ANSWER)
-     - `callsByDay` - last 30 days with call counts (for charting)
-     - `topRatedCalls` - top 5 highest-rated calls
-     - `longestCalls` - top 5 longest duration calls
-   - Uses Prisma aggregations for efficiency (count, aggregate, groupBy, $queryRaw)
-   - All database queries run in parallel using Promise.all()
-   - Proper error handling with 500 response on failure
-
-5. **Set up Jest testing framework**
-   - Created `jest.config.mjs` with TypeScript support
-   - Created `jest.setup.js` for test configuration
-   - Added test and test:watch scripts to package.json
-   - Installed jest, ts-jest, @types/jest, and @testing-library/jest-dom
-
-6. **Created comprehensive tests**
-   - Created `src/app/api/stats/__tests__/route.test.ts`
-   - Tests cover:
-     - Successful response with mock data
-     - Empty database handling (all zeros/empty arrays)
-     - Database error handling (500 response)
-     - Missing days filled with zero counts
-   - All 4 tests pass
-
-### Files created/modified:
-- `scamscrammer/prisma/schema.prisma` - Database schema with Call, CallSegment models and enums
-- `scamscrammer/prisma.config.ts` - Prisma 7 configuration
-- `scamscrammer/src/lib/db.ts` - Prisma client singleton
-- `scamscrammer/src/types/index.ts` - TypeScript type definitions
-- `scamscrammer/src/app/api/stats/route.ts` - Stats API endpoint
-- `scamscrammer/src/app/api/stats/__tests__/route.test.ts` - API tests
-- `scamscrammer/jest.config.mjs` - Jest configuration
-- `scamscrammer/jest.setup.js` - Jest setup
-- `scamscrammer/package.json` - Added test scripts and dependencies
-
----
-
-## Task: Implement OpenAI Realtime Voice Client
-
-**Status:** Completed
-**Date:** 2026-01-19
-
-### What was done:
-
-1. **Installed Dependencies**
-   - Added `openai` package for OpenAI SDK
-   - Added `ws` package for WebSocket support
-   - Added `@types/ws` for TypeScript type definitions
-
-2. **Created OpenAI Realtime Client Module**
-   - Created `src/lib/openai.ts` with full WebSocket-based client
-   - Implements connection to OpenAI Realtime API (`wss://api.openai.com/v1/realtime`)
-   - Uses proper authentication headers (`Authorization: Bearer`, `OpenAI-Beta: realtime=v1`)
-
-3. **OpenAIRealtimeClient Class Features:**
-   - **Connection Management:**
-     - `connect(sessionConfig)` - Establish realtime WebSocket session
-     - `disconnect(reason)` - Clean shutdown with proper close codes
-     - `isConnected()` - Check connection state
-     - `getState()` - Get current ConnectionState enum value
-     - `getSessionId()` - Get the current session ID
-
-   - **Audio Streaming:**
-     - `sendAudio(audioChunk: Buffer)` - Stream audio data to OpenAI (base64 encoded)
-     - `commitAudioBuffer()` - Signal end of speech input
-     - `clearAudioBuffer()` - Clear pending audio buffer
-     - `cancelResponse()` - Cancel current AI response
-     - `triggerResponse()` - Manually trigger AI response (for non-VAD mode)
-
-   - **Session Configuration:**
-     - `setSystemPrompt(prompt)` - Update system instructions mid-session
-     - `updateSession(config)` - Update voice, temperature, turn detection, etc.
-
-   - **Event Handlers:**
-     - `onResponse(callback)` - Handle audio response data
-     - `onTranscript(callback)` - Handle input/output transcripts
-     - `onError(callback)` - Handle errors
-     - `onDisconnect(callback)` - Handle disconnection
-
-   - **Events Emitted:**
-     - `stateChange` - Connection state changed
-     - `sessionCreated` - Session successfully created
-     - `audioResponse` - Audio chunk received from AI
-     - `transcript` - Text transcript (input or output, partial or final)
-     - `responseStart` - AI response started
-     - `responseEnd` - AI response completed (with token usage)
-     - `error` - Error occurred
-     - `disconnect` - Connection closed
-     - `speechStarted` - VAD detected speech start
-     - `speechStopped` - VAD detected speech end
-     - `inputAudioCommitted` - Audio buffer was committed
-     - `conversationItemCreated` - New conversation item
-
-4. **Configuration Support:**
-   - Uses `OpenAIRealtimeConfig` interface from types
-   - Default model: `gpt-4o-realtime-preview-2024-10-01`
-   - Default voice: `ash` (older male voice for Earl)
-   - Default audio format: `g711_ulaw` (Twilio compatible)
-   - Server VAD turn detection enabled by default
-   - Whisper transcription enabled by default
-
-5. **Error Handling:**
-   - Created `OpenAIRealtimeError` custom error class
-   - Includes error code, type, and optional event ID
-   - Proper WebSocket error handling
-   - Connection state tracking with ConnectionState enum
-
-6. **Reconnection Logic:**
-   - Automatic reconnection on unexpected disconnects
-   - Exponential backoff (1s, 2s, 4s)
-   - Max 3 reconnection attempts
-   - Clean close (code 1000) does not trigger reconnection
-
-7. **Earl Integration:**
-   - `createEarlClient(overrides)` factory function
-   - Pre-configured with EARL_SYSTEM_PROMPT
-   - Uses appropriate voice and timing settings
-   - Easy override of any default settings
-
-8. **Comprehensive Test Suite:**
-   - Created `src/lib/__tests__/openai.test.ts`
-   - 56 tests covering all functionality:
-     - Constructor and initial state
-     - Connection flow and state transitions
-     - API key validation
-     - Session configuration
-     - Audio streaming methods
-     - All event types
-     - Callback registration/unregistration
-     - Connection lifecycle
-     - Error handling
-     - createEarlClient factory function
-   - All tests pass using mocked WebSocket
-
-### Files created/modified:
-- `scamscrammer/src/lib/openai.ts` - OpenAI Realtime Voice Client (new)
-- `scamscrammer/src/lib/__tests__/openai.test.ts` - Client tests (new)
-- `scamscrammer/package.json` - Added openai, ws, @types/ws dependencies
+- @aws-sdk/client-s3 ^3.600.0
+- @aws-sdk/s3-request-presigner ^3.600.0
+- jest ^29.7.0
+- ts-jest ^29.1.2
+- @types/jest ^29.5.12

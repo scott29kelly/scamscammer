@@ -1,15 +1,12 @@
 # Dependencies
 node_modules/
 
-# Build outputs
-dist/
+# Build output
 .next/
 out/
+dist/
 
-# Test coverage
-coverage/
-
-# Environment variables
+# Environment files
 .env
 .env.local
 .env.*.local
@@ -17,16 +14,18 @@ coverage/
 # IDE
 .vscode/
 .idea/
-*.swp
-*.swo
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Logs
-*.log
+# Debug logs
 npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# TypeScript cache
+# Testing
+coverage/
+
+# Misc
 *.tsbuildinfo
