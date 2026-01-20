@@ -2,25 +2,36 @@
  * Stats API Endpoint Tests
  */
 
-import { GET } from '../route';
-import prisma from '@/lib/db';
-import { CallStatus } from '@prisma/client';
+// Define CallStatus enum locally since Prisma client might not be generated
+const CallStatus = {
+  RINGING: 'RINGING',
+  IN_PROGRESS: 'IN_PROGRESS',
+  COMPLETED: 'COMPLETED',
+  FAILED: 'FAILED',
+  NO_ANSWER: 'NO_ANSWER'
+} as const;
 
-// Mock the Prisma client
-jest.mock('@/lib/db', () => ({
-  __esModule: true,
-  default: {
-    call: {
-      count: jest.fn(),
-      aggregate: jest.fn(),
-      groupBy: jest.fn(),
-      findMany: jest.fn(),
-    },
-    $queryRaw: jest.fn(),
+type CallStatusType = typeof CallStatus[keyof typeof CallStatus];
+
+// Mock the Prisma client BEFORE imports
+const mockPrismaClient = {
+  call: {
+    count: jest.fn(),
+    aggregate: jest.fn(),
+    groupBy: jest.fn(),
+    findMany: jest.fn(),
   },
+  $queryRaw: jest.fn(),
+};
+
+jest.mock('../../../../lib/db', () => ({
+  __esModule: true,
+  default: mockPrismaClient,
 }));
 
-const mockPrisma = prisma as jest.Mocked<typeof prisma>;
+import { GET } from '../route';
+
+const mockPrisma = mockPrismaClient;
 
 describe('GET /api/stats', () => {
   beforeEach(() => {
