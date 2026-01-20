@@ -1,0 +1,83 @@
+# Recording Complete Webhook Handler - Implementation Progress
+
+## Task Completed: Create Recording Complete Webhook Handler
+
+### Summary
+Implemented a complete webhook handler for processing Twilio recording status callbacks. When a call recording is completed, the handler fetches the audio from Twilio, uploads it to S3, and updates the call record in the database.
+
+### Files Created
+
+#### 1. src/lib/twilio.ts
+Twilio client helper module with the following functions:
+- `validateTwilioSignature()` - Validates webhook signatures for security
+- `generateTwiMLResponse()` - Generates TwiML for voice responses
+- `generateStreamTwiML()` - Generates TwiML for WebSocket media streams
+- `getCallDetails()` - Fetches call information from Twilio
+- `getRecordingDetails()` - Fetches recording metadata from Twilio
+- `fetchRecordingAudio()` - Downloads recording audio as a Buffer
+- `formatPhoneNumber()` - Normalizes phone numbers to E.164 format
+- `deleteRecording()` - Removes a recording from Twilio
+
+#### 2. src/lib/storage.ts
+S3 storage service for call recordings:
+- `generateStorageKey()` - Creates consistent S3 keys (recordings/YYYY/MM/callId.mp3)
+- `uploadRecording()` - Uploads audio buffer to S3
+- `getRecordingUrl()` - Generates signed URLs for playback
+- `deleteRecording()` - Removes recordings from S3
+- `listRecordings()` - Lists recordings with pagination
+- `recordingExists()` - Checks if a recording exists
+
+#### 3. src/app/api/twilio/recording/route.ts
+POST webhook handler that:
+- Parses form-urlencoded Twilio webhook payloads
+- Validates Twilio signature in production
+- Finds the associated call record by Twilio SID
+- For completed recordings:
+  - Fetches audio from Twilio
+  - Uploads to S3 storage
+  - Updates call record with recording URL and duration
+- For failed recordings:
+  - Logs the failure
+  - Updates call notes with failure message
+- Always returns success to Twilio (to prevent retries)
+- Handles errors gracefully with logging
+
+#### 4. src/app/api/twilio/recording/__tests__/route.test.ts
+Comprehensive test suite with 13 test cases covering:
+- Successful recording processing
+- Duration parsing from payload
+- Signature validation in production
+- Call not found handling
+- Twilio recording fetch failures
+- S3 upload failures
+- Failed recording status handling
+- URL generation fallback
+- Unexpected error handling
+- Minimal payload parsing
+- Non-numeric duration handling
+
+### Additional Files
+- `tsconfig.json` - Added TypeScript configuration for the project
+
+### Dependencies Installed
+- `twilio` - Twilio SDK for API interactions and TwiML generation
+- `@aws-sdk/client-s3` - AWS SDK for S3 operations
+- `@aws-sdk/s3-request-presigner` - For generating signed URLs
+
+### Test Results
+All 64 tests passing (47 persona tests + 4 stats tests + 13 recording webhook tests)
+
+### Environment Variables Required
+The following environment variables need to be configured:
+- `TWILIO_ACCOUNT_SID` - Twilio account identifier
+- `TWILIO_AUTH_TOKEN` - Twilio authentication token
+- `AWS_REGION` - AWS region (defaults to us-east-1)
+- `AWS_ACCESS_KEY_ID` - AWS access key
+- `AWS_SECRET_ACCESS_KEY` - AWS secret key
+- `S3_BUCKET_NAME` - S3 bucket for storing recordings
+
+### Webhook Configuration
+Configure this webhook URL in Twilio console:
+`POST https://your-domain.com/api/twilio/recording`
+
+Set this as the "Recording Status Callback" URL for your Twilio voice configuration.
