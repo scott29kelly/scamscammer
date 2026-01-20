@@ -1,27 +1,39 @@
 'use client';
 
-/**
- * CallList Component
- *
- * Displays a paginated list of calls with sorting, filtering, and navigation.
- */
-
-import { useState } from 'react';
-import type { CallListItem, PaginationInfo } from '@/types';
+import { useState, useEffect, useCallback } from 'react';
+import type { CallListItem, CallListResponse, PaginationInfo } from '@/types';
 import { CallStatus } from '@prisma/client';
 
 interface CallListProps {
-  calls: CallListItem[];
-  pagination: PaginationInfo;
-  onPageChange: (page: number) => void;
-  onCallClick?: (callId: string) => void;
-  onStatusFilter?: (status: CallStatus | undefined) => void;
-  onSortChange?: (sortBy: string, sortOrder: 'asc' | 'desc') => void;
-  currentStatus?: CallStatus;
-  currentSortBy?: string;
-  currentSortOrder?: 'asc' | 'desc';
-  isLoading?: boolean;
+  initialCalls?: CallListItem[];
+  initialPagination?: PaginationInfo;
+  onCallClick?: (call: CallListItem) => void;
 }
+
+type SortField = 'createdAt' | 'duration' | 'rating';
+type SortOrder = 'asc' | 'desc';
+
+interface Filters {
+  status: string;
+  search: string;
+  minRating: string;
+}
+
+const STATUS_COLORS: Record<string, string> = {
+  RINGING: 'bg-yellow-500/20 text-yellow-400',
+  IN_PROGRESS: 'bg-blue-500/20 text-blue-400',
+  COMPLETED: 'bg-green-500/20 text-green-400',
+  FAILED: 'bg-red-500/20 text-red-400',
+  NO_ANSWER: 'bg-gray-500/20 text-gray-400',
+};
+
+const STATUS_LABELS: Record<string, string> = {
+  RINGING: 'Ringing',
+  IN_PROGRESS: 'In Progress',
+  COMPLETED: 'Completed',
+  FAILED: 'Failed',
+  NO_ANSWER: 'No Answer',
+};
 
 function formatDuration(seconds: number | null): string {
   if (seconds === null) return '-';
@@ -30,49 +42,37 @@ function formatDuration(seconds: number | null): string {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-function formatDate(date: Date): string {
-  return new Date(date).toLocaleDateString('en-US', {
+function formatDate(date: Date | string): string {
+  const d = new Date(date);
+  return d.toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
-    hour: '2-digit',
+    hour: 'numeric',
     minute: '2-digit',
   });
 }
 
 function formatPhoneNumber(phone: string): string {
-  // Simple phone formatting for US numbers
-  if (phone.startsWith('+1') && phone.length === 12) {
-    return `(${phone.slice(2, 5)}) ${phone.slice(5, 8)}-${phone.slice(8)}`;
+  // Format US phone numbers
+  const cleaned = phone.replace(/\D/g, '');
+  if (cleaned.length === 11 && cleaned.startsWith('1')) {
+    return `+1 (${cleaned.slice(1, 4)}) ${cleaned.slice(4, 7)}-${cleaned.slice(7)}`;
+  }
+  if (cleaned.length === 10) {
+    return `(${cleaned.slice(0, 3)}) ${cleaned.slice(3, 6)}-${cleaned.slice(6)}`;
   }
   return phone;
 }
 
-function getStatusColor(status: string): string {
-  switch (status) {
-    case 'COMPLETED':
-      return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200';
-    case 'IN_PROGRESS':
-      return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200';
-    case 'RINGING':
-      return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200';
-    case 'FAILED':
-      return 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200';
-    case 'NO_ANSWER':
-      return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200';
-    default:
-      return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200';
-  }
-}
-
 function RatingStars({ rating }: { rating: number | null }) {
-  if (rating === null) return <span className="text-gray-400">-</span>;
+  if (rating === null) return <span className="text-gray-600">-</span>;
   return (
     <div className="flex gap-0.5">
       {[1, 2, 3, 4, 5].map((star) => (
         <span
           key={star}
-          className={star <= rating ? 'text-yellow-400' : 'text-gray-300 dark:text-gray-600'}
+          className={star <= rating ? 'text-yellow-400' : 'text-gray-600'}
         >
           ★
         </span>
@@ -82,271 +82,286 @@ function RatingStars({ rating }: { rating: number | null }) {
 }
 
 export default function CallList({
-  calls,
-  pagination,
-  onPageChange,
+  initialCalls = [],
+  initialPagination,
   onCallClick,
-  onStatusFilter,
-  onSortChange,
-  currentStatus,
-  currentSortBy = 'createdAt',
-  currentSortOrder = 'desc',
-  isLoading = false,
 }: CallListProps) {
-  const [sortMenuOpen, setSortMenuOpen] = useState(false);
-
-  const handleSort = (field: string) => {
-    if (onSortChange) {
-      const newOrder = currentSortBy === field && currentSortOrder === 'desc' ? 'asc' : 'desc';
-      onSortChange(field, newOrder);
+  const [calls, setCalls] = useState<CallListItem[]>(initialCalls);
+  const [pagination, setPagination] = useState<PaginationInfo>(
+    initialPagination || {
+      total: 0,
+      page: 1,
+      limit: 20,
+      totalPages: 0,
+      hasNext: false,
+      hasPrev: false,
     }
-    setSortMenuOpen(false);
+  );
+  const [loading, setLoading] = useState(!initialCalls.length);
+  const [error, setError] = useState<string | null>(null);
+
+  const [filters, setFilters] = useState<Filters>({
+    status: '',
+    search: '',
+    minRating: '',
+  });
+  const [sortField, setSortField] = useState<SortField>('createdAt');
+  const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
+
+  const fetchCalls = useCallback(async (page: number = 1) => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      const params = new URLSearchParams();
+      params.set('page', String(page));
+      params.set('limit', String(pagination.limit));
+      params.set('sortBy', sortField);
+      params.set('sortOrder', sortOrder);
+
+      if (filters.status) params.set('status', filters.status);
+      if (filters.search) params.set('search', filters.search);
+      if (filters.minRating) params.set('minRating', filters.minRating);
+
+      const response = await fetch(`/api/calls?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error('Failed to fetch calls');
+      }
+
+      const data: CallListResponse = await response.json();
+      setCalls(data.calls);
+      setPagination(data.pagination);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'An error occurred');
+    } finally {
+      setLoading(false);
+    }
+  }, [filters, sortField, sortOrder, pagination.limit]);
+
+  useEffect(() => {
+    if (!initialCalls.length) {
+      fetchCalls(1);
+    }
+  }, [fetchCalls, initialCalls.length]);
+
+  const handleFilterChange = (key: keyof Filters, value: string) => {
+    setFilters((prev) => ({ ...prev, [key]: value }));
   };
 
-  const getSortIndicator = (field: string) => {
-    if (currentSortBy !== field) return null;
-    return currentSortOrder === 'asc' ? '↑' : '↓';
+  const handleApplyFilters = () => {
+    fetchCalls(1);
   };
 
-  if (isLoading) {
-    return (
-      <div className="animate-pulse">
-        <div className="h-10 bg-gray-200 dark:bg-gray-700 rounded mb-4" />
-        {[...Array(5)].map((_, i) => (
-          <div key={i} className="h-16 bg-gray-100 dark:bg-gray-800 rounded mb-2" />
-        ))}
-      </div>
-    );
-  }
+  const handleSort = (field: SortField) => {
+    if (field === sortField) {
+      setSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortField(field);
+      setSortOrder('desc');
+    }
+  };
 
-  if (calls.length === 0) {
-    return (
-      <div className="text-center py-12">
-        <div className="text-gray-400 text-6xl mb-4">📞</div>
-        <h3 className="text-lg font-medium text-gray-900 dark:text-white">No calls found</h3>
-        <p className="text-gray-500 dark:text-gray-400 mt-1">
-          {currentStatus
-            ? `No calls with status "${currentStatus.replace('_', ' ')}"`
-            : 'No calls have been recorded yet'}
-        </p>
-      </div>
-    );
-  }
+  useEffect(() => {
+    if (!loading) {
+      fetchCalls(1);
+    }
+    // Only re-fetch when sort changes, not on initial load
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sortField, sortOrder]);
+
+  const handlePageChange = (newPage: number) => {
+    fetchCalls(newPage);
+  };
+
+  const SortIndicator = ({ field }: { field: SortField }) => {
+    if (sortField !== field) return <span className="text-gray-600">↕</span>;
+    return <span className="text-blue-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>;
+  };
 
   return (
-    <div className="space-y-4">
-      {/* Filters and Sort Controls */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        {/* Status Filter */}
-        {onStatusFilter && (
-          <div className="flex flex-wrap gap-2">
-            <button
-              onClick={() => onStatusFilter(undefined)}
-              className={`px-3 py-1.5 text-sm rounded-full transition-colors ${
-                !currentStatus
-                  ? 'bg-gray-900 text-white dark:bg-white dark:text-gray-900'
-                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'
-              }`}
-            >
-              All
-            </button>
+    <div className="w-full">
+      {/* Filters */}
+      <div className="mb-6 flex flex-wrap gap-4 items-end">
+        <div className="flex-1 min-w-[200px]">
+          <label className="block text-sm text-gray-400 mb-1">Search</label>
+          <input
+            type="text"
+            value={filters.search}
+            onChange={(e) => handleFilterChange('search', e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleApplyFilters()}
+            placeholder="Phone number or notes..."
+            className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
+          />
+        </div>
+
+        <div className="w-40">
+          <label className="block text-sm text-gray-400 mb-1">Status</label>
+          <select
+            value={filters.status}
+            onChange={(e) => handleFilterChange('status', e.target.value)}
+            className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+          >
+            <option value="">All Statuses</option>
             {Object.values(CallStatus).map((status) => (
-              <button
-                key={status}
-                onClick={() => onStatusFilter(status)}
-                className={`px-3 py-1.5 text-sm rounded-full transition-colors ${
-                  currentStatus === status
-                    ? 'bg-gray-900 text-white dark:bg-white dark:text-gray-900'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'
-                }`}
-              >
-                {status.replace('_', ' ')}
-              </button>
+              <option key={status} value={status}>
+                {STATUS_LABELS[status]}
+              </option>
             ))}
-          </div>
-        )}
+          </select>
+        </div>
 
-        {/* Sort Dropdown */}
-        {onSortChange && (
-          <div className="relative">
-            <button
-              onClick={() => setSortMenuOpen(!sortMenuOpen)}
-              className="flex items-center gap-2 px-3 py-1.5 text-sm bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 rounded-lg transition-colors"
-            >
-              <span>Sort by: {currentSortBy}</span>
-              <span className="text-xs">{currentSortOrder === 'asc' ? '↑' : '↓'}</span>
-            </button>
-            {sortMenuOpen && (
-              <div className="absolute right-0 mt-1 w-40 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 z-10">
-                {['createdAt', 'duration', 'rating'].map((field) => (
-                  <button
-                    key={field}
-                    onClick={() => handleSort(field)}
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 first:rounded-t-lg last:rounded-b-lg"
+        <div className="w-32">
+          <label className="block text-sm text-gray-400 mb-1">Min Rating</label>
+          <select
+            value={filters.minRating}
+            onChange={(e) => handleFilterChange('minRating', e.target.value)}
+            className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+          >
+            <option value="">Any</option>
+            {[1, 2, 3, 4, 5].map((rating) => (
+              <option key={rating} value={rating}>
+                {rating}+ ★
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <button
+          onClick={handleApplyFilters}
+          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
+        >
+          Apply
+        </button>
+      </div>
+
+      {/* Error State */}
+      {error && (
+        <div className="mb-4 p-4 bg-red-500/20 border border-red-500 rounded-lg text-red-400">
+          {error}
+        </div>
+      )}
+
+      {/* Loading State */}
+      {loading && (
+        <div className="flex justify-center items-center py-12">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+        </div>
+      )}
+
+      {/* Empty State */}
+      {!loading && !error && calls.length === 0 && (
+        <div className="text-center py-12">
+          <div className="text-gray-400 text-lg mb-2">No calls found</div>
+          <p className="text-gray-500 text-sm">
+            {filters.status || filters.search || filters.minRating
+              ? 'Try adjusting your filters'
+              : 'Calls will appear here once they are received'}
+          </p>
+        </div>
+      )}
+
+      {/* Call List Table */}
+      {!loading && !error && calls.length > 0 && (
+        <>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="text-left text-gray-400 border-b border-gray-800">
+                  <th
+                    className="pb-3 pr-4 cursor-pointer hover:text-white transition-colors"
+                    onClick={() => handleSort('createdAt')}
                   >
-                    {field === 'createdAt' ? 'Date' : field.charAt(0).toUpperCase() + field.slice(1)}
-                    {currentSortBy === field && (
-                      <span className="float-right">{getSortIndicator(field)}</span>
-                    )}
-                  </button>
+                    Date <SortIndicator field="createdAt" />
+                  </th>
+                  <th className="pb-3 pr-4">From</th>
+                  <th className="pb-3 pr-4">Status</th>
+                  <th
+                    className="pb-3 pr-4 cursor-pointer hover:text-white transition-colors"
+                    onClick={() => handleSort('duration')}
+                  >
+                    Duration <SortIndicator field="duration" />
+                  </th>
+                  <th
+                    className="pb-3 pr-4 cursor-pointer hover:text-white transition-colors"
+                    onClick={() => handleSort('rating')}
+                  >
+                    Rating <SortIndicator field="rating" />
+                  </th>
+                  <th className="pb-3">Segments</th>
+                </tr>
+              </thead>
+              <tbody>
+                {calls.map((call) => (
+                  <tr
+                    key={call.id}
+                    onClick={() => onCallClick?.(call)}
+                    className={`border-b border-gray-800/50 hover:bg-gray-800/50 transition-colors ${
+                      onCallClick ? 'cursor-pointer' : ''
+                    }`}
+                  >
+                    <td className="py-4 pr-4">
+                      <div className="text-white">{formatDate(call.createdAt)}</div>
+                    </td>
+                    <td className="py-4 pr-4">
+                      <div className="text-white font-mono">
+                        {formatPhoneNumber(call.fromNumber)}
+                      </div>
+                    </td>
+                    <td className="py-4 pr-4">
+                      <span
+                        className={`px-2 py-1 rounded-full text-xs font-medium ${
+                          STATUS_COLORS[call.status] || 'bg-gray-500/20 text-gray-400'
+                        }`}
+                      >
+                        {STATUS_LABELS[call.status] || call.status}
+                      </span>
+                    </td>
+                    <td className="py-4 pr-4">
+                      <span className="text-white font-mono">
+                        {formatDuration(call.duration)}
+                      </span>
+                    </td>
+                    <td className="py-4 pr-4">
+                      <RatingStars rating={call.rating} />
+                    </td>
+                    <td className="py-4">
+                      <span className="text-gray-400">{call._count.segments}</span>
+                    </td>
+                  </tr>
                 ))}
-              </div>
-            )}
+              </tbody>
+            </table>
           </div>
-        )}
-      </div>
 
-      {/* Call Table */}
-      <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
-        <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-          <thead className="bg-gray-50 dark:bg-gray-800">
-            <tr>
-              <th
-                scope="col"
-                className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700"
-                onClick={() => handleSort('createdAt')}
+          {/* Pagination */}
+          <div className="mt-6 flex items-center justify-between">
+            <div className="text-gray-400 text-sm">
+              Showing {(pagination.page - 1) * pagination.limit + 1} to{' '}
+              {Math.min(pagination.page * pagination.limit, pagination.total)} of{' '}
+              {pagination.total} calls
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => handlePageChange(pagination.page - 1)}
+                disabled={!pagination.hasPrev}
+                className="px-3 py-1 bg-gray-800 border border-gray-700 rounded text-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-700 transition-colors"
               >
-                Date {getSortIndicator('createdAt')}
-              </th>
-              <th
-                scope="col"
-                className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider"
+                Previous
+              </button>
+              <span className="px-3 py-1 text-gray-400">
+                Page {pagination.page} of {pagination.totalPages}
+              </span>
+              <button
+                onClick={() => handlePageChange(pagination.page + 1)}
+                disabled={!pagination.hasNext}
+                className="px-3 py-1 bg-gray-800 border border-gray-700 rounded text-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-700 transition-colors"
               >
-                From
-              </th>
-              <th
-                scope="col"
-                className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider"
-              >
-                Status
-              </th>
-              <th
-                scope="col"
-                className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700"
-                onClick={() => handleSort('duration')}
-              >
-                Duration {getSortIndicator('duration')}
-              </th>
-              <th
-                scope="col"
-                className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700"
-                onClick={() => handleSort('rating')}
-              >
-                Rating {getSortIndicator('rating')}
-              </th>
-              <th
-                scope="col"
-                className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider"
-              >
-                Segments
-              </th>
-            </tr>
-          </thead>
-          <tbody className="bg-white dark:bg-gray-900 divide-y divide-gray-200 dark:divide-gray-700">
-            {calls.map((call) => (
-              <tr
-                key={call.id}
-                onClick={() => onCallClick?.(call.id)}
-                className={`${
-                  onCallClick ? 'cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800' : ''
-                } transition-colors`}
-              >
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
-                  {formatDate(call.createdAt)}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white font-mono">
-                  {formatPhoneNumber(call.fromNumber)}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap">
-                  <span
-                    className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(
-                      call.status
-                    )}`}
-                  >
-                    {call.status.replace('_', ' ')}
-                  </span>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white font-mono">
-                  {formatDuration(call.duration)}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap">
-                  <RatingStars rating={call.rating} />
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-                  {call._count.segments}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Pagination */}
-      <div className="flex items-center justify-between">
-        <div className="text-sm text-gray-700 dark:text-gray-300">
-          Showing{' '}
-          <span className="font-medium">
-            {(pagination.page - 1) * pagination.limit + 1}
-          </span>{' '}
-          to{' '}
-          <span className="font-medium">
-            {Math.min(pagination.page * pagination.limit, pagination.total)}
-          </span>{' '}
-          of <span className="font-medium">{pagination.total}</span> calls
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={() => onPageChange(pagination.page - 1)}
-            disabled={!pagination.hasPrev}
-            className={`px-4 py-2 text-sm rounded-lg border transition-colors ${
-              pagination.hasPrev
-                ? 'border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300'
-                : 'border-gray-200 dark:border-gray-700 text-gray-400 dark:text-gray-600 cursor-not-allowed'
-            }`}
-          >
-            Previous
-          </button>
-          <div className="flex items-center gap-1">
-            {/* Page numbers */}
-            {[...Array(Math.min(5, pagination.totalPages))].map((_, i) => {
-              let pageNum: number;
-              if (pagination.totalPages <= 5) {
-                pageNum = i + 1;
-              } else if (pagination.page <= 3) {
-                pageNum = i + 1;
-              } else if (pagination.page >= pagination.totalPages - 2) {
-                pageNum = pagination.totalPages - 4 + i;
-              } else {
-                pageNum = pagination.page - 2 + i;
-              }
-              return (
-                <button
-                  key={pageNum}
-                  onClick={() => onPageChange(pageNum)}
-                  className={`w-10 h-10 text-sm rounded-lg transition-colors ${
-                    pagination.page === pageNum
-                      ? 'bg-gray-900 text-white dark:bg-white dark:text-gray-900'
-                      : 'hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300'
-                  }`}
-                >
-                  {pageNum}
-                </button>
-              );
-            })}
+                Next
+              </button>
+            </div>
           </div>
-          <button
-            onClick={() => onPageChange(pagination.page + 1)}
-            disabled={!pagination.hasNext}
-            className={`px-4 py-2 text-sm rounded-lg border transition-colors ${
-              pagination.hasNext
-                ? 'border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300'
-                : 'border-gray-200 dark:border-gray-700 text-gray-400 dark:text-gray-600 cursor-not-allowed'
-            }`}
-          >
-            Next
-          </button>
-        </div>
-      </div>
+        </>
+      )}
     </div>
   );
 }

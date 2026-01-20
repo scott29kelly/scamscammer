@@ -20,15 +20,15 @@ jest.mock('@/lib/db', () => ({
 
 const mockPrisma = prisma as jest.Mocked<typeof prisma>;
 
-function createMockRequest(params: Record<string, string> = {}): NextRequest {
-  const url = new URL('http://localhost:3000/api/calls');
-  Object.entries(params).forEach(([key, value]) => {
-    url.searchParams.set(key, value);
-  });
-  return new NextRequest(url);
+function createRequest(url: string): NextRequest {
+  return new NextRequest(new URL(url, 'http://localhost:3000'));
 }
 
 describe('GET /api/calls', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
   const mockCalls = [
     {
       id: 'call-1',
@@ -41,7 +41,7 @@ describe('GET /api/calls', () => {
       transcriptUrl: null,
       rating: 5,
       notes: 'Great call',
-      tags: ['funny'],
+      tags: ['funny', 'long'],
       createdAt: new Date('2026-01-15T10:00:00Z'),
       updatedAt: new Date('2026-01-15T10:05:00Z'),
       _count: { segments: 10 },
@@ -64,43 +64,43 @@ describe('GET /api/calls', () => {
     },
   ];
 
-  beforeEach(() => {
-    jest.clearAllMocks();
-  });
-
-  it('should return paginated calls list', async () => {
-    (mockPrisma.call.count as jest.Mock).mockResolvedValue(10);
+  it('should return paginated list of calls', async () => {
+    (mockPrisma.call.count as jest.Mock).mockResolvedValue(2);
     (mockPrisma.call.findMany as jest.Mock).mockResolvedValue(mockCalls);
 
-    const request = createMockRequest();
-    const response = await GET(request);
+    const response = await GET(createRequest('/api/calls'));
     const data = await response.json();
 
     expect(response.status).toBe(200);
-    expect(data).toHaveProperty('calls');
-    expect(data).toHaveProperty('pagination');
-    expect(data.calls.length).toBe(2);
-    expect(data.pagination.total).toBe(10);
-    expect(data.pagination.page).toBe(1);
-    expect(data.pagination.limit).toBe(20);
+    expect(data.calls).toHaveLength(2);
+    expect(data.pagination).toEqual({
+      total: 2,
+      page: 1,
+      limit: 20,
+      totalPages: 1,
+      hasNext: false,
+      hasPrev: false,
+    });
   });
 
-  it('should handle page and limit parameters', async () => {
+  it('should handle custom pagination parameters', async () => {
     (mockPrisma.call.count as jest.Mock).mockResolvedValue(50);
-    (mockPrisma.call.findMany as jest.Mock).mockResolvedValue([mockCalls[0]]);
+    (mockPrisma.call.findMany as jest.Mock).mockResolvedValue(mockCalls.slice(0, 1));
 
-    const request = createMockRequest({ page: '2', limit: '10' });
-    const response = await GET(request);
+    const response = await GET(createRequest('/api/calls?page=2&limit=10'));
     const data = await response.json();
 
     expect(response.status).toBe(200);
-    expect(data.pagination.page).toBe(2);
-    expect(data.pagination.limit).toBe(10);
-    expect(data.pagination.totalPages).toBe(5);
-    expect(data.pagination.hasNext).toBe(true);
-    expect(data.pagination.hasPrev).toBe(true);
+    expect(data.pagination).toEqual({
+      total: 50,
+      page: 2,
+      limit: 10,
+      totalPages: 5,
+      hasNext: true,
+      hasPrev: true,
+    });
 
-    // Verify skip and take were called correctly
+    // Verify skip is calculated correctly
     expect(mockPrisma.call.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         skip: 10,
@@ -110,121 +110,119 @@ describe('GET /api/calls', () => {
   });
 
   it('should filter by status', async () => {
-    (mockPrisma.call.count as jest.Mock).mockResolvedValue(5);
-    (mockPrisma.call.findMany as jest.Mock).mockResolvedValue([mockCalls[0]]);
-
-    const request = createMockRequest({ status: 'COMPLETED' });
-    const response = await GET(request);
-    const data = await response.json();
-
-    expect(response.status).toBe(200);
-    expect(mockPrisma.call.count).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({
-          status: CallStatus.COMPLETED,
-        }),
-      })
-    );
-    expect(mockPrisma.call.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({
-          status: CallStatus.COMPLETED,
-        }),
-      })
-    );
-  });
-
-  it('should filter by date range', async () => {
-    (mockPrisma.call.count as jest.Mock).mockResolvedValue(2);
-    (mockPrisma.call.findMany as jest.Mock).mockResolvedValue(mockCalls);
-
-    const request = createMockRequest({
-      startDate: '2026-01-01',
-      endDate: '2026-01-31',
-    });
-    const response = await GET(request);
-
-    expect(response.status).toBe(200);
-    expect(mockPrisma.call.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({
-          createdAt: expect.objectContaining({
-            gte: expect.any(Date),
-            lte: expect.any(Date),
-          }),
-        }),
-      })
-    );
-  });
-
-  it('should handle search parameter', async () => {
     (mockPrisma.call.count as jest.Mock).mockResolvedValue(1);
     (mockPrisma.call.findMany as jest.Mock).mockResolvedValue([mockCalls[0]]);
 
-    const request = createMockRequest({ search: '5551234567' });
-    const response = await GET(request);
+    const response = await GET(createRequest('/api/calls?status=COMPLETED'));
+    const data = await response.json();
 
     expect(response.status).toBe(200);
     expect(mockPrisma.call.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
-          OR: expect.arrayContaining([
-            expect.objectContaining({
-              fromNumber: { contains: '5551234567', mode: 'insensitive' },
-            }),
-          ]),
+          status: CallStatus.COMPLETED,
+        }),
+      })
+    );
+    expect(data.calls).toHaveLength(1);
+  });
+
+  it('should filter by search term', async () => {
+    (mockPrisma.call.count as jest.Mock).mockResolvedValue(1);
+    (mockPrisma.call.findMany as jest.Mock).mockResolvedValue([mockCalls[0]]);
+
+    const response = await GET(createRequest('/api/calls?search=5551234567'));
+    await response.json();
+
+    expect(mockPrisma.call.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          OR: [
+            { fromNumber: { contains: '5551234567', mode: 'insensitive' } },
+            { toNumber: { contains: '5551234567', mode: 'insensitive' } },
+            { notes: { contains: '5551234567', mode: 'insensitive' } },
+          ],
         }),
       })
     );
   });
 
-  it('should handle sort parameters', async () => {
-    (mockPrisma.call.count as jest.Mock).mockResolvedValue(10);
-    (mockPrisma.call.findMany as jest.Mock).mockResolvedValue(mockCalls);
+  it('should filter by minimum rating', async () => {
+    (mockPrisma.call.count as jest.Mock).mockResolvedValue(1);
+    (mockPrisma.call.findMany as jest.Mock).mockResolvedValue([mockCalls[0]]);
 
-    const request = createMockRequest({ sortBy: 'duration', sortOrder: 'asc' });
-    const response = await GET(request);
+    const response = await GET(createRequest('/api/calls?minRating=4'));
+    await response.json();
 
-    expect(response.status).toBe(200);
     expect(mockPrisma.call.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        orderBy: {
-          duration: 'asc',
-        },
+        where: expect.objectContaining({
+          rating: { gte: 4 },
+        }),
       })
     );
   });
 
-  it('should default to sorting by createdAt desc', async () => {
-    (mockPrisma.call.count as jest.Mock).mockResolvedValue(10);
-    (mockPrisma.call.findMany as jest.Mock).mockResolvedValue(mockCalls);
+  it('should filter by tag', async () => {
+    (mockPrisma.call.count as jest.Mock).mockResolvedValue(1);
+    (mockPrisma.call.findMany as jest.Mock).mockResolvedValue([mockCalls[0]]);
 
-    const request = createMockRequest();
-    await GET(request);
+    const response = await GET(createRequest('/api/calls?tag=funny'));
+    await response.json();
 
     expect(mockPrisma.call.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        orderBy: {
-          createdAt: 'desc',
-        },
+        where: expect.objectContaining({
+          tags: { has: 'funny' },
+        }),
       })
     );
   });
 
-  it('should handle empty results', async () => {
+  it('should sort by specified field and order', async () => {
+    (mockPrisma.call.count as jest.Mock).mockResolvedValue(2);
+    (mockPrisma.call.findMany as jest.Mock).mockResolvedValue(mockCalls);
+
+    const response = await GET(createRequest('/api/calls?sortBy=duration&sortOrder=asc'));
+    await response.json();
+
+    expect(mockPrisma.call.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orderBy: { duration: 'asc' },
+      })
+    );
+  });
+
+  it('should use default sort (createdAt desc) when not specified', async () => {
+    (mockPrisma.call.count as jest.Mock).mockResolvedValue(2);
+    (mockPrisma.call.findMany as jest.Mock).mockResolvedValue(mockCalls);
+
+    await GET(createRequest('/api/calls'));
+
+    expect(mockPrisma.call.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orderBy: { createdAt: 'desc' },
+      })
+    );
+  });
+
+  it('should handle empty database gracefully', async () => {
     (mockPrisma.call.count as jest.Mock).mockResolvedValue(0);
     (mockPrisma.call.findMany as jest.Mock).mockResolvedValue([]);
 
-    const request = createMockRequest();
-    const response = await GET(request);
+    const response = await GET(createRequest('/api/calls'));
     const data = await response.json();
 
     expect(response.status).toBe(200);
     expect(data.calls).toEqual([]);
-    expect(data.pagination.total).toBe(0);
-    expect(data.pagination.totalPages).toBe(0);
-    expect(data.pagination.hasNext).toBe(false);
-    expect(data.pagination.hasPrev).toBe(false);
+    expect(data.pagination).toEqual({
+      total: 0,
+      page: 1,
+      limit: 20,
+      totalPages: 0,
+      hasNext: false,
+      hasPrev: false,
+    });
   });
 
   it('should return 500 on database error', async () => {
@@ -232,20 +230,35 @@ describe('GET /api/calls', () => {
       new Error('Database connection failed')
     );
 
-    const request = createMockRequest();
-    const response = await GET(request);
+    const response = await GET(createRequest('/api/calls'));
     const data = await response.json();
 
     expect(response.status).toBe(500);
     expect(data).toHaveProperty('error', 'Failed to fetch calls');
   });
 
+  it('should ignore invalid status filter', async () => {
+    (mockPrisma.call.count as jest.Mock).mockResolvedValue(2);
+    (mockPrisma.call.findMany as jest.Mock).mockResolvedValue(mockCalls);
+
+    const response = await GET(createRequest('/api/calls?status=INVALID_STATUS'));
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    // Should not include status in where clause
+    expect(mockPrisma.call.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {},
+      })
+    );
+    expect(data.calls).toHaveLength(2);
+  });
+
   it('should enforce maximum limit of 100', async () => {
     (mockPrisma.call.count as jest.Mock).mockResolvedValue(200);
     (mockPrisma.call.findMany as jest.Mock).mockResolvedValue(mockCalls);
 
-    const request = createMockRequest({ limit: '200' });
-    const response = await GET(request);
+    const response = await GET(createRequest('/api/calls?limit=500'));
     const data = await response.json();
 
     expect(response.status).toBe(200);
@@ -257,48 +270,20 @@ describe('GET /api/calls', () => {
     );
   });
 
-  it('should enforce minimum page of 1', async () => {
-    (mockPrisma.call.count as jest.Mock).mockResolvedValue(10);
+  it('should ignore invalid rating filter', async () => {
+    (mockPrisma.call.count as jest.Mock).mockResolvedValue(2);
     (mockPrisma.call.findMany as jest.Mock).mockResolvedValue(mockCalls);
 
-    const request = createMockRequest({ page: '-5' });
-    const response = await GET(request);
+    const response = await GET(createRequest('/api/calls?minRating=10'));
     const data = await response.json();
 
     expect(response.status).toBe(200);
-    expect(data.pagination.page).toBe(1);
-    expect(mockPrisma.call.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        skip: 0,
-      })
-    );
-  });
-
-  it('should ignore invalid status values', async () => {
-    (mockPrisma.call.count as jest.Mock).mockResolvedValue(10);
-    (mockPrisma.call.findMany as jest.Mock).mockResolvedValue(mockCalls);
-
-    const request = createMockRequest({ status: 'INVALID_STATUS' });
-    const response = await GET(request);
-
-    expect(response.status).toBe(200);
-    // Should not include status filter when invalid
+    // Should not include rating in where clause since 10 > 5
     expect(mockPrisma.call.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {},
       })
     );
-  });
-
-  it('should include segment count in response', async () => {
-    (mockPrisma.call.count as jest.Mock).mockResolvedValue(1);
-    (mockPrisma.call.findMany as jest.Mock).mockResolvedValue([mockCalls[0]]);
-
-    const request = createMockRequest();
-    const response = await GET(request);
-    const data = await response.json();
-
-    expect(response.status).toBe(200);
-    expect(data.calls[0]._count.segments).toBe(10);
+    expect(data.calls).toHaveLength(2);
   });
 });

@@ -6,111 +6,89 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
-import type { CallListResponse, ApiErrorResponse, PaginationInfo, CallListItem } from '@/types';
-import { CallStatus } from '@prisma/client';
+import type { CallListResponse, ApiErrorResponse, CallListItem } from '@/types';
+import { CallStatus, Prisma } from '@prisma/client';
 
-interface CallQueryParams {
-  page: number;
-  limit: number;
-  status?: CallStatus;
-  startDate?: Date;
-  endDate?: Date;
-  sortBy: 'createdAt' | 'duration' | 'rating';
-  sortOrder: 'asc' | 'desc';
-  search?: string;
-}
+const DEFAULT_PAGE = 1;
+const DEFAULT_LIMIT = 20;
+const MAX_LIMIT = 100;
 
-function parseQueryParams(request: NextRequest): CallQueryParams {
-  const searchParams = request.nextUrl.searchParams;
-
-  const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10));
-  const limit = Math.min(100, Math.max(1, parseInt(searchParams.get('limit') || '20', 10)));
-
-  const statusParam = searchParams.get('status');
-  const status = statusParam && Object.values(CallStatus).includes(statusParam as CallStatus)
-    ? (statusParam as CallStatus)
-    : undefined;
-
-  const startDateParam = searchParams.get('startDate');
-  const startDate = startDateParam ? new Date(startDateParam) : undefined;
-
-  const endDateParam = searchParams.get('endDate');
-  const endDate = endDateParam ? new Date(endDateParam) : undefined;
-
-  const sortByParam = searchParams.get('sortBy');
-  const sortBy = ['createdAt', 'duration', 'rating'].includes(sortByParam || '')
-    ? (sortByParam as 'createdAt' | 'duration' | 'rating')
-    : 'createdAt';
-
-  const sortOrderParam = searchParams.get('sortOrder');
-  const sortOrder = sortOrderParam === 'asc' ? 'asc' : 'desc';
-
-  const search = searchParams.get('search') || undefined;
-
-  return {
-    page,
-    limit,
-    status,
-    startDate,
-    endDate,
-    sortBy,
-    sortOrder,
-    search,
-  };
-}
+type SortField = 'createdAt' | 'duration' | 'rating';
+type SortOrder = 'asc' | 'desc';
 
 export async function GET(
   request: NextRequest
 ): Promise<NextResponse<CallListResponse | ApiErrorResponse>> {
   try {
-    const params = parseQueryParams(request);
+    const { searchParams } = new URL(request.url);
 
-    // Build where clause for filtering
-    const where: {
-      status?: CallStatus;
-      createdAt?: {
-        gte?: Date;
-        lte?: Date;
-      };
-      OR?: Array<{
-        fromNumber?: { contains: string; mode: 'insensitive' };
-        toNumber?: { contains: string; mode: 'insensitive' };
-        notes?: { contains: string; mode: 'insensitive' };
-      }>;
-    } = {};
+    // Parse pagination parameters
+    const page = Math.max(1, parseInt(searchParams.get('page') || String(DEFAULT_PAGE), 10));
+    const limit = Math.min(
+      MAX_LIMIT,
+      Math.max(1, parseInt(searchParams.get('limit') || String(DEFAULT_LIMIT), 10))
+    );
+    const skip = (page - 1) * limit;
 
-    if (params.status) {
-      where.status = params.status;
+    // Parse filter parameters
+    const status = searchParams.get('status');
+    const search = searchParams.get('search');
+    const minRating = searchParams.get('minRating');
+    const tag = searchParams.get('tag');
+
+    // Parse sort parameters
+    const sortField = (searchParams.get('sortBy') || 'createdAt') as SortField;
+    const sortOrder = (searchParams.get('sortOrder') || 'desc') as SortOrder;
+
+    // Validate sort field
+    const validSortFields: SortField[] = ['createdAt', 'duration', 'rating'];
+    const validSortOrders: SortOrder[] = ['asc', 'desc'];
+
+    const actualSortField = validSortFields.includes(sortField) ? sortField : 'createdAt';
+    const actualSortOrder = validSortOrders.includes(sortOrder) ? sortOrder : 'desc';
+
+    // Build where clause
+    const where: Prisma.CallWhereInput = {};
+
+    if (status) {
+      // Validate status is a valid CallStatus
+      if (Object.values(CallStatus).includes(status as CallStatus)) {
+        where.status = status as CallStatus;
+      }
     }
 
-    if (params.startDate || params.endDate) {
-      where.createdAt = {};
-      if (params.startDate) {
-        where.createdAt.gte = params.startDate;
-      }
-      if (params.endDate) {
-        where.createdAt.lte = params.endDate;
-      }
-    }
-
-    if (params.search) {
+    if (search) {
       where.OR = [
-        { fromNumber: { contains: params.search, mode: 'insensitive' } },
-        { toNumber: { contains: params.search, mode: 'insensitive' } },
-        { notes: { contains: params.search, mode: 'insensitive' } },
+        { fromNumber: { contains: search, mode: 'insensitive' } },
+        { toNumber: { contains: search, mode: 'insensitive' } },
+        { notes: { contains: search, mode: 'insensitive' } },
       ];
     }
 
-    // Run count and query in parallel
+    if (minRating) {
+      const rating = parseInt(minRating, 10);
+      if (!isNaN(rating) && rating >= 1 && rating <= 5) {
+        where.rating = { gte: rating };
+      }
+    }
+
+    if (tag) {
+      where.tags = { has: tag };
+    }
+
+    // Build orderBy clause
+    const orderBy: Prisma.CallOrderByWithRelationInput = {
+      [actualSortField]: actualSortOrder,
+    };
+
+    // Run count and findMany in parallel
     const [total, calls] = await Promise.all([
       prisma.call.count({ where }),
       prisma.call.findMany({
         where,
-        orderBy: {
-          [params.sortBy]: params.sortOrder,
-        },
-        skip: (params.page - 1) * params.limit,
-        take: params.limit,
+        orderBy,
+        skip,
+        take: limit,
         include: {
           _count: {
             select: {
@@ -121,18 +99,10 @@ export async function GET(
       }),
     ]);
 
-    const totalPages = Math.ceil(total / params.limit);
+    // Calculate pagination info
+    const totalPages = Math.ceil(total / limit);
 
-    const pagination: PaginationInfo = {
-      total,
-      page: params.page,
-      limit: params.limit,
-      totalPages,
-      hasNext: params.page < totalPages,
-      hasPrev: params.page > 1,
-    };
-
-    // Map to CallListItem type
+    // Map to CallListItem format
     const callListItems: CallListItem[] = calls.map((call) => ({
       id: call.id,
       twilioSid: call.twilioSid,
@@ -150,10 +120,19 @@ export async function GET(
       _count: call._count,
     }));
 
-    return NextResponse.json({
+    const response: CallListResponse = {
       calls: callListItems,
-      pagination,
-    });
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages,
+        hasNext: page < totalPages,
+        hasPrev: page > 1,
+      },
+    };
+
+    return NextResponse.json(response);
   } catch (error) {
     console.error('Error fetching calls:', error);
     return NextResponse.json(
