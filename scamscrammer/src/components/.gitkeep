@@ -1,0 +1,5 @@
+# This directory contains React components:
+# - CallList.tsx: Call history list component
+# - CallPlayer.tsx: Audio player component
+# - TranscriptViewer.tsx: Conversation transcript display
+# - StatsCard.tsx: Dashboard statistics card

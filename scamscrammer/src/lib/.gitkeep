@@ -1,0 +1,6 @@
+# This directory contains utility modules:
+# - twilio.ts: Twilio client and helpers
+# - openai.ts: OpenAI Realtime client
+# - db.ts: Database client
+# - storage.ts: S3/recording storage
+# - persona.ts: Earl AI persona configuration
