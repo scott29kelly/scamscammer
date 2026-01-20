@@ -14,546 +14,476 @@ jest.mock('@/lib/db', () => ({
     call: {
       findUnique: jest.fn(),
       update: jest.fn(),
-      create: jest.fn(),
     },
   },
 }));
 
+// Mock the twilio module
+jest.mock('@/lib/twilio', () => ({
+  validateTwilioSignature: jest.fn(() => true),
+  getTwilioAuthToken: jest.fn(() => 'test-auth-token'),
+  getWebhookBaseUrl: jest.fn(() => 'https://example.com'),
+}));
+
 const mockPrisma = prisma as jest.Mocked<typeof prisma>;
 
-// Helper function to create a mock NextRequest with form data
-function createFormDataRequest(data: Record<string, string>): NextRequest {
-  const formData = new URLSearchParams(data);
-  return new NextRequest('http://localhost/api/twilio/status', {
+// Helper to create a mock NextRequest with form data
+function createMockRequest(
+  params: Record<string, string>,
+  headers: Record<string, string> = {}
+): NextRequest {
+  const formData = new FormData();
+  for (const [key, value] of Object.entries(params)) {
+    formData.append(key, value);
+  }
+
+  const request = new NextRequest('https://example.com/api/twilio/status', {
     method: 'POST',
-    headers: {
-      'content-type': 'application/x-www-form-urlencoded',
-    },
-    body: formData.toString(),
+    body: formData,
+    headers: new Headers(headers),
   });
+
+  return request;
 }
-
-// Helper function to create a mock NextRequest with JSON data
-function createJsonRequest(data: Record<string, unknown>): NextRequest {
-  return new NextRequest('http://localhost/api/twilio/status', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify(data),
-  });
-}
-
-// Mock call data
-const mockExistingCall = {
-  id: 'call-123',
-  twilioSid: 'CA123456789',
-  fromNumber: '+15551234567',
-  toNumber: '+15559876543',
-  status: CallStatus.RINGING,
-  duration: null,
-  recordingUrl: null,
-  transcriptUrl: null,
-  rating: null,
-  notes: null,
-  tags: [],
-  createdAt: new Date('2026-01-15T10:00:00Z'),
-  updatedAt: new Date('2026-01-15T10:00:00Z'),
-};
-
-// Valid Twilio status payload
-const validPayload = {
-  CallSid: 'CA123456789',
-  AccountSid: 'AC123456789',
-  From: '+15551234567',
-  To: '+15559876543',
-  CallStatus: 'in-progress',
-  Direction: 'inbound',
-};
 
 describe('POST /api/twilio/status', () => {
+  const originalEnv = process.env;
+
   beforeEach(() => {
     jest.clearAllMocks();
+    process.env = { ...originalEnv, TWILIO_AUTH_TOKEN: 'test-token' };
   });
 
-  describe('Payload Validation', () => {
-    it('should reject request with missing CallSid', async () => {
-      const payload = { ...validPayload, CallSid: '' };
-      const request = createJsonRequest(payload);
-
-      const response = await POST(request);
-      const data = await response.json();
-
-      expect(response.status).toBe(400);
-      expect(data.error).toBe('Invalid payload');
-      expect(data.code).toBe('INVALID_PAYLOAD');
-    });
-
-    it('should reject request with missing AccountSid', async () => {
-      const payload = { ...validPayload, AccountSid: '' };
-      const request = createJsonRequest(payload);
-
-      const response = await POST(request);
-      const data = await response.json();
-
-      expect(response.status).toBe(400);
-      expect(data.error).toBe('Invalid payload');
-    });
-
-    it('should reject request with invalid CallStatus', async () => {
-      const payload = { ...validPayload, CallStatus: 'invalid-status' };
-      const request = createJsonRequest(payload);
-
-      const response = await POST(request);
-      const data = await response.json();
-
-      expect(response.status).toBe(400);
-      expect(data.error).toBe('Invalid payload');
-    });
-
-    it('should reject request with missing required fields', async () => {
-      const request = createJsonRequest({ CallSid: 'CA123' });
-
-      const response = await POST(request);
-      const data = await response.json();
-
-      expect(response.status).toBe(400);
-      expect(data.error).toBe('Invalid payload');
-    });
+  afterEach(() => {
+    process.env = originalEnv;
   });
 
-  describe('Status Updates for Existing Calls', () => {
-    it('should update call status to IN_PROGRESS', async () => {
-      const payload = { ...validPayload, CallStatus: 'in-progress' };
-      const request = createJsonRequest(payload);
+  it('should update call status to IN_PROGRESS when call is answered', async () => {
+    const existingCall = {
+      id: 'call-123',
+      status: CallStatus.RINGING,
+    };
 
-      (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(mockExistingCall);
-      (mockPrisma.call.update as jest.Mock).mockResolvedValue({
-        ...mockExistingCall,
-        status: CallStatus.IN_PROGRESS,
-      });
+    const updatedCall = {
+      id: 'call-123',
+      status: CallStatus.IN_PROGRESS,
+      duration: null,
+    };
 
-      const response = await POST(request);
-      const data = await response.json();
+    (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(existingCall);
+    (mockPrisma.call.update as jest.Mock).mockResolvedValue(updatedCall);
 
-      expect(response.status).toBe(200);
-      expect(data.success).toBe(true);
-      expect(data.status).toBe(CallStatus.IN_PROGRESS);
-      expect(mockPrisma.call.update).toHaveBeenCalledWith({
-        where: { twilioSid: 'CA123456789' },
-        data: { status: CallStatus.IN_PROGRESS },
-      });
-    });
+    const request = createMockRequest(
+      {
+        CallSid: 'CA123456',
+        AccountSid: 'AC123456',
+        From: '+15551234567',
+        To: '+15559876543',
+        CallStatus: 'in-progress',
+        Direction: 'inbound',
+        ApiVersion: '2010-04-01',
+      },
+      { 'X-Twilio-Signature': 'valid-signature' }
+    );
 
-    it('should update call status to COMPLETED with duration', async () => {
-      const payload = {
-        ...validPayload,
-        CallStatus: 'completed',
-        CallDuration: '300',
-      };
-      const request = createJsonRequest(payload);
+    const response = await POST(request);
+    const data = await response.json();
 
-      (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(mockExistingCall);
-      (mockPrisma.call.update as jest.Mock).mockResolvedValue({
-        ...mockExistingCall,
-        status: CallStatus.COMPLETED,
-        duration: 300,
-      });
+    expect(response.status).toBe(200);
+    expect(data.success).toBe(true);
+    expect(data.callId).toBe('call-123');
+    expect(data.previousStatus).toBe(CallStatus.RINGING);
+    expect(data.newStatus).toBe(CallStatus.IN_PROGRESS);
 
-      const response = await POST(request);
-      const data = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(data.success).toBe(true);
-      expect(data.status).toBe(CallStatus.COMPLETED);
-      expect(mockPrisma.call.update).toHaveBeenCalledWith({
-        where: { twilioSid: 'CA123456789' },
-        data: { status: CallStatus.COMPLETED, duration: 300 },
-      });
-    });
-
-    it('should update call status to RINGING for ringing status', async () => {
-      const payload = { ...validPayload, CallStatus: 'ringing' };
-      const request = createJsonRequest(payload);
-
-      (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(mockExistingCall);
-      (mockPrisma.call.update as jest.Mock).mockResolvedValue({
-        ...mockExistingCall,
-        status: CallStatus.RINGING,
-      });
-
-      const response = await POST(request);
-      const data = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(data.status).toBe(CallStatus.RINGING);
-    });
-
-    it('should update call status to RINGING for queued status', async () => {
-      const payload = { ...validPayload, CallStatus: 'queued' };
-      const request = createJsonRequest(payload);
-
-      (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(mockExistingCall);
-      (mockPrisma.call.update as jest.Mock).mockResolvedValue({
-        ...mockExistingCall,
-        status: CallStatus.RINGING,
-      });
-
-      const response = await POST(request);
-      const data = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(data.status).toBe(CallStatus.RINGING);
-    });
-
-    it('should update call status to FAILED for failed status', async () => {
-      const payload = { ...validPayload, CallStatus: 'failed' };
-      const request = createJsonRequest(payload);
-
-      (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(mockExistingCall);
-      (mockPrisma.call.update as jest.Mock).mockResolvedValue({
-        ...mockExistingCall,
-        status: CallStatus.FAILED,
-      });
-
-      const response = await POST(request);
-      const data = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(data.status).toBe(CallStatus.FAILED);
-    });
-
-    it('should update call status to NO_ANSWER for busy status', async () => {
-      const payload = { ...validPayload, CallStatus: 'busy' };
-      const request = createJsonRequest(payload);
-
-      (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(mockExistingCall);
-      (mockPrisma.call.update as jest.Mock).mockResolvedValue({
-        ...mockExistingCall,
-        status: CallStatus.NO_ANSWER,
-      });
-
-      const response = await POST(request);
-      const data = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(data.status).toBe(CallStatus.NO_ANSWER);
-    });
-
-    it('should update call status to NO_ANSWER for no-answer status', async () => {
-      const payload = { ...validPayload, CallStatus: 'no-answer' };
-      const request = createJsonRequest(payload);
-
-      (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(mockExistingCall);
-      (mockPrisma.call.update as jest.Mock).mockResolvedValue({
-        ...mockExistingCall,
-        status: CallStatus.NO_ANSWER,
-      });
-
-      const response = await POST(request);
-      const data = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(data.status).toBe(CallStatus.NO_ANSWER);
-    });
-
-    it('should update call status to NO_ANSWER for canceled status', async () => {
-      const payload = { ...validPayload, CallStatus: 'canceled' };
-      const request = createJsonRequest(payload);
-
-      (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(mockExistingCall);
-      (mockPrisma.call.update as jest.Mock).mockResolvedValue({
-        ...mockExistingCall,
-        status: CallStatus.NO_ANSWER,
-      });
-
-      const response = await POST(request);
-      const data = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(data.status).toBe(CallStatus.NO_ANSWER);
+    expect(mockPrisma.call.update).toHaveBeenCalledWith({
+      where: { twilioSid: 'CA123456' },
+      data: { status: CallStatus.IN_PROGRESS },
+      select: { id: true, status: true, duration: true },
     });
   });
 
-  describe('Creating New Calls', () => {
-    it('should create new call when CallSid not found', async () => {
-      const payload = { ...validPayload };
-      const request = createJsonRequest(payload);
+  it('should update call status to COMPLETED with duration when call ends', async () => {
+    const existingCall = {
+      id: 'call-123',
+      status: CallStatus.IN_PROGRESS,
+    };
 
-      const newCall = {
-        id: 'new-call-123',
-        twilioSid: 'CA123456789',
-        fromNumber: '+15551234567',
-        toNumber: '+15559876543',
-        status: CallStatus.IN_PROGRESS,
-        duration: null,
-        recordingUrl: null,
-        transcriptUrl: null,
-        rating: null,
-        notes: null,
-        tags: [],
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
+    const updatedCall = {
+      id: 'call-123',
+      status: CallStatus.COMPLETED,
+      duration: 300,
+    };
 
-      (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(null);
-      (mockPrisma.call.create as jest.Mock).mockResolvedValue(newCall);
+    (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(existingCall);
+    (mockPrisma.call.update as jest.Mock).mockResolvedValue(updatedCall);
 
-      const response = await POST(request);
-      const data = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(data.success).toBe(true);
-      expect(data.callId).toBe('new-call-123');
-      expect(data.status).toBe(CallStatus.IN_PROGRESS);
-      expect(mockPrisma.call.create).toHaveBeenCalledWith({
-        data: {
-          twilioSid: 'CA123456789',
-          fromNumber: '+15551234567',
-          toNumber: '+15559876543',
-          status: CallStatus.IN_PROGRESS,
-        },
-      });
-    });
-
-    it('should create new call with duration when provided', async () => {
-      const payload = {
-        ...validPayload,
-        CallStatus: 'completed',
-        CallDuration: '120',
-      };
-      const request = createJsonRequest(payload);
-
-      const newCall = {
-        id: 'new-call-456',
-        twilioSid: 'CA123456789',
-        fromNumber: '+15551234567',
-        toNumber: '+15559876543',
-        status: CallStatus.COMPLETED,
-        duration: 120,
-        recordingUrl: null,
-        transcriptUrl: null,
-        rating: null,
-        notes: null,
-        tags: [],
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-
-      (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(null);
-      (mockPrisma.call.create as jest.Mock).mockResolvedValue(newCall);
-
-      const response = await POST(request);
-      const data = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(data.success).toBe(true);
-      expect(mockPrisma.call.create).toHaveBeenCalledWith({
-        data: {
-          twilioSid: 'CA123456789',
-          fromNumber: '+15551234567',
-          toNumber: '+15559876543',
-          status: CallStatus.COMPLETED,
-          duration: 120,
-        },
-      });
-    });
-  });
-
-  describe('Content-Type Handling', () => {
-    it('should handle application/x-www-form-urlencoded content type', async () => {
-      const request = createFormDataRequest({
-        CallSid: 'CA123456789',
-        AccountSid: 'AC123456789',
+    const request = createMockRequest(
+      {
+        CallSid: 'CA123456',
+        AccountSid: 'AC123456',
         From: '+15551234567',
         To: '+15559876543',
         CallStatus: 'completed',
+        CallDuration: '300',
         Direction: 'inbound',
-        CallDuration: '60',
-      });
+        ApiVersion: '2010-04-01',
+      },
+      { 'X-Twilio-Signature': 'valid-signature' }
+    );
 
-      (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(mockExistingCall);
-      (mockPrisma.call.update as jest.Mock).mockResolvedValue({
-        ...mockExistingCall,
+    const response = await POST(request);
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(data.success).toBe(true);
+    expect(data.newStatus).toBe(CallStatus.COMPLETED);
+    expect(data.duration).toBe(300);
+
+    expect(mockPrisma.call.update).toHaveBeenCalledWith({
+      where: { twilioSid: 'CA123456' },
+      data: {
         status: CallStatus.COMPLETED,
-        duration: 60,
-      });
-
-      const response = await POST(request);
-      const data = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(data.success).toBe(true);
-      expect(data.status).toBe(CallStatus.COMPLETED);
-    });
-
-    it('should handle application/json content type', async () => {
-      const request = createJsonRequest({
-        ...validPayload,
-        CallStatus: 'completed',
-        CallDuration: '180',
-      });
-
-      (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(mockExistingCall);
-      (mockPrisma.call.update as jest.Mock).mockResolvedValue({
-        ...mockExistingCall,
-        status: CallStatus.COMPLETED,
-        duration: 180,
-      });
-
-      const response = await POST(request);
-      const data = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(data.success).toBe(true);
+        duration: 300,
+      },
+      select: { id: true, status: true, duration: true },
     });
   });
 
-  describe('Error Handling', () => {
-    it('should return 500 on database error during findUnique', async () => {
-      const request = createJsonRequest(validPayload);
+  it('should map ringing status correctly', async () => {
+    const existingCall = {
+      id: 'call-123',
+      status: CallStatus.RINGING,
+    };
 
-      (mockPrisma.call.findUnique as jest.Mock).mockRejectedValue(
-        new Error('Database connection failed')
-      );
+    const updatedCall = {
+      id: 'call-123',
+      status: CallStatus.RINGING,
+      duration: null,
+    };
 
-      const response = await POST(request);
-      const data = await response.json();
+    (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(existingCall);
+    (mockPrisma.call.update as jest.Mock).mockResolvedValue(updatedCall);
 
-      expect(response.status).toBe(500);
-      expect(data.error).toBe('Failed to process call status update');
-      expect(data.code).toBe('INTERNAL_ERROR');
-    });
+    const request = createMockRequest(
+      {
+        CallSid: 'CA123456',
+        CallStatus: 'ringing',
+      },
+      { 'X-Twilio-Signature': 'valid-signature' }
+    );
 
-    it('should return 500 on database error during update', async () => {
-      const request = createJsonRequest(validPayload);
+    const response = await POST(request);
+    const data = await response.json();
 
-      (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(mockExistingCall);
-      (mockPrisma.call.update as jest.Mock).mockRejectedValue(
-        new Error('Database update failed')
-      );
-
-      const response = await POST(request);
-      const data = await response.json();
-
-      expect(response.status).toBe(500);
-      expect(data.error).toBe('Failed to process call status update');
-    });
-
-    it('should return 500 on database error during create', async () => {
-      const request = createJsonRequest(validPayload);
-
-      (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(null);
-      (mockPrisma.call.create as jest.Mock).mockRejectedValue(
-        new Error('Database create failed')
-      );
-
-      const response = await POST(request);
-      const data = await response.json();
-
-      expect(response.status).toBe(500);
-      expect(data.error).toBe('Failed to process call status update');
-    });
-
-    it('should return 409 on unique constraint violation', async () => {
-      const request = createJsonRequest(validPayload);
-
-      (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(null);
-      (mockPrisma.call.create as jest.Mock).mockRejectedValue(
-        new Error('Unique constraint failed on the fields: (`twilioSid`)')
-      );
-
-      const response = await POST(request);
-      const data = await response.json();
-
-      expect(response.status).toBe(409);
-      expect(data.error).toBe('Call already exists');
-      expect(data.code).toBe('DUPLICATE_CALL');
-    });
+    expect(response.status).toBe(200);
+    expect(data.newStatus).toBe(CallStatus.RINGING);
   });
 
-  describe('Edge Cases', () => {
-    it('should handle CallDuration of 0', async () => {
-      const payload = {
-        ...validPayload,
-        CallStatus: 'completed',
-        CallDuration: '0',
-      };
-      const request = createJsonRequest(payload);
+  it('should map no-answer status to NO_ANSWER', async () => {
+    const existingCall = {
+      id: 'call-123',
+      status: CallStatus.RINGING,
+    };
 
-      (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(mockExistingCall);
-      (mockPrisma.call.update as jest.Mock).mockResolvedValue({
-        ...mockExistingCall,
-        status: CallStatus.COMPLETED,
-        duration: 0,
-      });
+    const updatedCall = {
+      id: 'call-123',
+      status: CallStatus.NO_ANSWER,
+      duration: null,
+    };
 
-      const response = await POST(request);
-      const data = await response.json();
+    (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(existingCall);
+    (mockPrisma.call.update as jest.Mock).mockResolvedValue(updatedCall);
 
-      expect(response.status).toBe(200);
-      expect(mockPrisma.call.update).toHaveBeenCalledWith({
-        where: { twilioSid: 'CA123456789' },
-        data: { status: CallStatus.COMPLETED, duration: 0 },
-      });
-    });
+    const request = createMockRequest(
+      {
+        CallSid: 'CA123456',
+        CallStatus: 'no-answer',
+      },
+      { 'X-Twilio-Signature': 'valid-signature' }
+    );
 
-    it('should not include duration if CallDuration is not provided', async () => {
-      const payload = { ...validPayload };
-      delete (payload as Record<string, unknown>).CallDuration;
-      const request = createJsonRequest(payload);
+    const response = await POST(request);
+    const data = await response.json();
 
-      (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(mockExistingCall);
-      (mockPrisma.call.update as jest.Mock).mockResolvedValue({
-        ...mockExistingCall,
-        status: CallStatus.IN_PROGRESS,
-      });
+    expect(response.status).toBe(200);
+    expect(data.newStatus).toBe(CallStatus.NO_ANSWER);
+  });
 
-      const response = await POST(request);
+  it('should map busy status to FAILED', async () => {
+    const existingCall = {
+      id: 'call-123',
+      status: CallStatus.RINGING,
+    };
 
-      expect(response.status).toBe(200);
-      expect(mockPrisma.call.update).toHaveBeenCalledWith({
-        where: { twilioSid: 'CA123456789' },
-        data: { status: CallStatus.IN_PROGRESS },
-      });
-    });
+    const updatedCall = {
+      id: 'call-123',
+      status: CallStatus.FAILED,
+      duration: null,
+    };
 
-    it('should handle international phone numbers', async () => {
-      const payload = {
-        ...validPayload,
-        From: '+447700900000',
-        To: '+12025551234',
-      };
-      const request = createJsonRequest(payload);
+    (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(existingCall);
+    (mockPrisma.call.update as jest.Mock).mockResolvedValue(updatedCall);
 
-      (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(null);
-      (mockPrisma.call.create as jest.Mock).mockResolvedValue({
-        id: 'intl-call-123',
-        twilioSid: 'CA123456789',
-        fromNumber: '+447700900000',
-        toNumber: '+12025551234',
-        status: CallStatus.IN_PROGRESS,
-        duration: null,
-        recordingUrl: null,
-        transcriptUrl: null,
-        rating: null,
-        notes: null,
-        tags: [],
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      });
+    const request = createMockRequest(
+      {
+        CallSid: 'CA123456',
+        CallStatus: 'busy',
+      },
+      { 'X-Twilio-Signature': 'valid-signature' }
+    );
 
-      const response = await POST(request);
-      const data = await response.json();
+    const response = await POST(request);
+    const data = await response.json();
 
-      expect(response.status).toBe(200);
-      expect(data.success).toBe(true);
-      expect(mockPrisma.call.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({
-          fromNumber: '+447700900000',
-          toNumber: '+12025551234',
-        }),
-      });
+    expect(response.status).toBe(200);
+    expect(data.newStatus).toBe(CallStatus.FAILED);
+  });
+
+  it('should map failed status to FAILED', async () => {
+    const existingCall = {
+      id: 'call-123',
+      status: CallStatus.RINGING,
+    };
+
+    const updatedCall = {
+      id: 'call-123',
+      status: CallStatus.FAILED,
+      duration: null,
+    };
+
+    (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(existingCall);
+    (mockPrisma.call.update as jest.Mock).mockResolvedValue(updatedCall);
+
+    const request = createMockRequest(
+      {
+        CallSid: 'CA123456',
+        CallStatus: 'failed',
+      },
+      { 'X-Twilio-Signature': 'valid-signature' }
+    );
+
+    const response = await POST(request);
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(data.newStatus).toBe(CallStatus.FAILED);
+  });
+
+  it('should map canceled status to FAILED', async () => {
+    const existingCall = {
+      id: 'call-123',
+      status: CallStatus.RINGING,
+    };
+
+    const updatedCall = {
+      id: 'call-123',
+      status: CallStatus.FAILED,
+      duration: null,
+    };
+
+    (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(existingCall);
+    (mockPrisma.call.update as jest.Mock).mockResolvedValue(updatedCall);
+
+    const request = createMockRequest(
+      {
+        CallSid: 'CA123456',
+        CallStatus: 'canceled',
+      },
+      { 'X-Twilio-Signature': 'valid-signature' }
+    );
+
+    const response = await POST(request);
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(data.newStatus).toBe(CallStatus.FAILED);
+  });
+
+  it('should map initiated status to RINGING', async () => {
+    const existingCall = {
+      id: 'call-123',
+      status: CallStatus.RINGING,
+    };
+
+    const updatedCall = {
+      id: 'call-123',
+      status: CallStatus.RINGING,
+      duration: null,
+    };
+
+    (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(existingCall);
+    (mockPrisma.call.update as jest.Mock).mockResolvedValue(updatedCall);
+
+    const request = createMockRequest(
+      {
+        CallSid: 'CA123456',
+        CallStatus: 'initiated',
+      },
+      { 'X-Twilio-Signature': 'valid-signature' }
+    );
+
+    const response = await POST(request);
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(data.newStatus).toBe(CallStatus.RINGING);
+  });
+
+  it('should map queued status to RINGING', async () => {
+    const existingCall = {
+      id: 'call-123',
+      status: CallStatus.RINGING,
+    };
+
+    const updatedCall = {
+      id: 'call-123',
+      status: CallStatus.RINGING,
+      duration: null,
+    };
+
+    (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(existingCall);
+    (mockPrisma.call.update as jest.Mock).mockResolvedValue(updatedCall);
+
+    const request = createMockRequest(
+      {
+        CallSid: 'CA123456',
+        CallStatus: 'queued',
+      },
+      { 'X-Twilio-Signature': 'valid-signature' }
+    );
+
+    const response = await POST(request);
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(data.newStatus).toBe(CallStatus.RINGING);
+  });
+
+  it('should return 404 when call is not found', async () => {
+    (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(null);
+
+    const request = createMockRequest(
+      {
+        CallSid: 'CA-unknown',
+        CallStatus: 'in-progress',
+      },
+      { 'X-Twilio-Signature': 'valid-signature' }
+    );
+
+    const response = await POST(request);
+    const data = await response.json();
+
+    expect(response.status).toBe(404);
+    expect(data.error).toBe('Call not found');
+    expect(data.code).toBe('CALL_NOT_FOUND');
+  });
+
+  it('should return 400 when CallSid is missing', async () => {
+    const request = createMockRequest(
+      {
+        CallStatus: 'in-progress',
+      },
+      { 'X-Twilio-Signature': 'valid-signature' }
+    );
+
+    const response = await POST(request);
+    const data = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(data.error).toBe('Missing required fields');
+    expect(data.code).toBe('MISSING_FIELDS');
+  });
+
+  it('should return 400 when CallStatus is missing', async () => {
+    const request = createMockRequest(
+      {
+        CallSid: 'CA123456',
+      },
+      { 'X-Twilio-Signature': 'valid-signature' }
+    );
+
+    const response = await POST(request);
+    const data = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(data.error).toBe('Missing required fields');
+    expect(data.code).toBe('MISSING_FIELDS');
+  });
+
+  it('should return 401 when signature is invalid', async () => {
+    // Re-mock validateTwilioSignature to return false for this test
+    const { validateTwilioSignature } = require('@/lib/twilio');
+    (validateTwilioSignature as jest.Mock).mockReturnValueOnce(false);
+
+    const request = createMockRequest(
+      {
+        CallSid: 'CA123456',
+        CallStatus: 'in-progress',
+      },
+      { 'X-Twilio-Signature': 'invalid-signature' }
+    );
+
+    const response = await POST(request);
+    const data = await response.json();
+
+    expect(response.status).toBe(401);
+    expect(data.error).toBe('Invalid signature');
+    expect(data.code).toBe('INVALID_SIGNATURE');
+  });
+
+  it('should return 500 on database error', async () => {
+    (mockPrisma.call.findUnique as jest.Mock).mockRejectedValue(
+      new Error('Database connection failed')
+    );
+
+    const request = createMockRequest(
+      {
+        CallSid: 'CA123456',
+        CallStatus: 'in-progress',
+      },
+      { 'X-Twilio-Signature': 'valid-signature' }
+    );
+
+    const response = await POST(request);
+    const data = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(data.error).toBe('Internal server error');
+    expect(data.code).toBe('INTERNAL_ERROR');
+  });
+
+  it('should not update duration for non-completed status', async () => {
+    const existingCall = {
+      id: 'call-123',
+      status: CallStatus.RINGING,
+    };
+
+    const updatedCall = {
+      id: 'call-123',
+      status: CallStatus.IN_PROGRESS,
+      duration: null,
+    };
+
+    (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(existingCall);
+    (mockPrisma.call.update as jest.Mock).mockResolvedValue(updatedCall);
+
+    // Even if CallDuration is provided, it should only be saved when status is completed
+    const request = createMockRequest(
+      {
+        CallSid: 'CA123456',
+        CallStatus: 'in-progress',
+        CallDuration: '100', // Duration provided but shouldn't be saved
+      },
+      { 'X-Twilio-Signature': 'valid-signature' }
+    );
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+    expect(mockPrisma.call.update).toHaveBeenCalledWith({
+      where: { twilioSid: 'CA123456' },
+      data: { status: CallStatus.IN_PROGRESS },
+      select: { id: true, status: true, duration: true },
     });
   });
 });

@@ -1,24 +1,51 @@
 /**
  * Twilio Call Status Webhook Handler
  *
- * POST /api/twilio/status - Receives call status updates from Twilio
+ * POST /api/twilio/status - Receives status callbacks from Twilio
  *
- * This endpoint is called by Twilio whenever the status of a call changes.
- * It updates the corresponding call record in the database with the new status
- * and duration (when available).
+ * This endpoint handles status updates throughout a call's lifecycle:
+ * - queued, initiated, ringing: Early call stages
+ * - in-progress: Call is connected
+ * - completed: Call ended normally
+ * - busy, no-answer, canceled, failed: Call did not connect
+ *
+ * @see https://www.twilio.com/docs/voice/twiml#callstatus-values
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
-import type { TwilioStatusPayload, ApiErrorResponse } from '@/types';
+import {
+  validateTwilioSignature,
+  getTwilioAuthToken,
+  getWebhookBaseUrl,
+  type TwilioCallStatus,
+} from '@/lib/twilio';
 import { CallStatus } from '@prisma/client';
+import type { ApiErrorResponse } from '@/types';
 
 /**
- * Maps Twilio call status strings to our CallStatus enum
+ * Twilio status callback payload structure
  */
-function mapTwilioStatusToCallStatus(twilioStatus: TwilioStatusPayload['CallStatus']): CallStatus {
+interface TwilioStatusPayload {
+  CallSid: string;
+  AccountSid: string;
+  From: string;
+  To: string;
+  CallStatus: TwilioCallStatus;
+  CallDuration?: string;
+  Direction: string;
+  ApiVersion: string;
+  Timestamp?: string;
+}
+
+/**
+ * Maps Twilio call status to our CallStatus enum
+ */
+function mapTwilioStatusToCallStatus(twilioStatus: TwilioCallStatus): CallStatus {
   switch (twilioStatus) {
     case 'queued':
+    case 'initiated':
+      return CallStatus.RINGING;
     case 'ringing':
       return CallStatus.RINGING;
     case 'in-progress':
@@ -26,181 +53,173 @@ function mapTwilioStatusToCallStatus(twilioStatus: TwilioStatusPayload['CallStat
     case 'completed':
       return CallStatus.COMPLETED;
     case 'busy':
-    case 'no-answer':
     case 'canceled':
-      return CallStatus.NO_ANSWER;
     case 'failed':
       return CallStatus.FAILED;
+    case 'no-answer':
+      return CallStatus.NO_ANSWER;
     default:
-      // TypeScript should catch this, but handle unknown statuses gracefully
-      console.warn(`Unknown Twilio status: ${twilioStatus}, defaulting to FAILED`);
+      // Fallback for any unknown status
+      console.warn(`Unknown Twilio status received: ${twilioStatus}`);
       return CallStatus.FAILED;
   }
 }
 
 /**
- * Validates that the payload contains required fields
+ * Success response structure
  */
-function isValidTwilioStatusPayload(payload: unknown): payload is TwilioStatusPayload {
-  if (typeof payload !== 'object' || payload === null) {
-    return false;
-  }
-
-  const p = payload as Record<string, unknown>;
-
-  // Required fields
-  if (typeof p.CallSid !== 'string' || p.CallSid.length === 0) {
-    return false;
-  }
-  if (typeof p.AccountSid !== 'string' || p.AccountSid.length === 0) {
-    return false;
-  }
-  if (typeof p.From !== 'string') {
-    return false;
-  }
-  if (typeof p.To !== 'string') {
-    return false;
-  }
-  if (typeof p.CallStatus !== 'string') {
-    return false;
-  }
-  if (typeof p.Direction !== 'string') {
-    return false;
-  }
-
-  // Validate CallStatus is one of the expected values
-  const validStatuses = ['queued', 'ringing', 'in-progress', 'completed', 'busy', 'failed', 'no-answer', 'canceled'];
-  if (!validStatuses.includes(p.CallStatus)) {
-    return false;
-  }
-
-  return true;
-}
-
-/**
- * Success response for Twilio webhooks
- */
-interface TwilioWebhookSuccessResponse {
-  success: true;
+interface StatusUpdateResponse {
+  success: boolean;
   callId: string;
-  status: CallStatus;
+  previousStatus: CallStatus;
+  newStatus: CallStatus;
+  duration?: number;
 }
 
 export async function POST(
   request: NextRequest
-): Promise<NextResponse<TwilioWebhookSuccessResponse | ApiErrorResponse>> {
+): Promise<NextResponse<StatusUpdateResponse | ApiErrorResponse>> {
   try {
-    // Parse the request body
-    // Twilio sends form-urlencoded data by default, but can also send JSON
-    const contentType = request.headers.get('content-type') || '';
-    let payload: unknown;
+    // Parse the URL-encoded form data from Twilio
+    const formData = await request.formData();
+    const params: Record<string, string> = {};
 
-    if (contentType.includes('application/x-www-form-urlencoded')) {
-      const formData = await request.formData();
-      payload = Object.fromEntries(formData.entries());
-    } else if (contentType.includes('application/json')) {
-      payload = await request.json();
-    } else {
-      // Try to parse as form data (Twilio default)
-      try {
-        const formData = await request.formData();
-        payload = Object.fromEntries(formData.entries());
-      } catch {
-        // Fall back to JSON parsing
-        const text = await request.text();
-        payload = JSON.parse(text);
-      }
+    for (const [key, value] of formData.entries()) {
+      params[key] = value.toString();
     }
 
-    // Validate the payload
-    if (!isValidTwilioStatusPayload(payload)) {
-      console.error('Invalid Twilio status payload:', payload);
+    // Extract required fields
+    const payload: TwilioStatusPayload = {
+      CallSid: params.CallSid || '',
+      AccountSid: params.AccountSid || '',
+      From: params.From || '',
+      To: params.To || '',
+      CallStatus: (params.CallStatus || '') as TwilioCallStatus,
+      CallDuration: params.CallDuration,
+      Direction: params.Direction || '',
+      ApiVersion: params.ApiVersion || '',
+      Timestamp: params.Timestamp,
+    };
+
+    // Validate required fields
+    if (!payload.CallSid || !payload.CallStatus) {
+      console.error('Missing required fields in Twilio status callback:', {
+        hasCallSid: !!payload.CallSid,
+        hasCallStatus: !!payload.CallStatus,
+      });
       return NextResponse.json(
         {
-          error: 'Invalid payload',
-          code: 'INVALID_PAYLOAD',
-          details: { message: 'Missing or invalid required fields' },
+          error: 'Missing required fields',
+          code: 'MISSING_FIELDS',
+          details: {
+            CallSid: payload.CallSid ? 'present' : 'missing',
+            CallStatus: payload.CallStatus ? 'present' : 'missing',
+          },
         },
         { status: 400 }
       );
     }
 
-    // Map Twilio status to our CallStatus enum
-    const callStatus = mapTwilioStatusToCallStatus(payload.CallStatus);
+    // Validate Twilio signature (skip in development if auth token not set)
+    const twilioSignature = request.headers.get('X-Twilio-Signature');
+    const authToken = process.env.TWILIO_AUTH_TOKEN;
 
-    // Parse duration if available (Twilio sends it as a string)
-    const duration = payload.CallDuration ? parseInt(payload.CallDuration, 10) : undefined;
+    if (authToken && twilioSignature) {
+      const baseUrl = getWebhookBaseUrl();
+      const webhookUrl = `${baseUrl}/api/twilio/status`;
 
-    // Try to find and update the existing call record
-    const existingCall = await prisma.call.findUnique({
-      where: { twilioSid: payload.CallSid },
-    });
-
-    if (existingCall) {
-      // Update existing call
-      const updatedCall = await prisma.call.update({
-        where: { twilioSid: payload.CallSid },
-        data: {
-          status: callStatus,
-          ...(duration !== undefined && { duration }),
-        },
-      });
-
-      console.log(
-        `Call status updated: ${payload.CallSid} -> ${callStatus}${duration !== undefined ? ` (${duration}s)` : ''}`
+      const isValid = validateTwilioSignature(
+        authToken,
+        twilioSignature,
+        webhookUrl,
+        params
       );
 
-      return NextResponse.json({
-        success: true,
-        callId: updatedCall.id,
-        status: updatedCall.status,
-      });
-    } else {
-      // Create new call record if it doesn't exist
-      // This can happen if the status callback arrives before the incoming call handler
-      const newCall = await prisma.call.create({
-        data: {
-          twilioSid: payload.CallSid,
-          fromNumber: payload.From,
-          toNumber: payload.To,
-          status: callStatus,
-          ...(duration !== undefined && { duration }),
-        },
-      });
-
-      console.log(
-        `New call created from status webhook: ${payload.CallSid} -> ${callStatus}${duration !== undefined ? ` (${duration}s)` : ''}`
-      );
-
-      return NextResponse.json({
-        success: true,
-        callId: newCall.id,
-        status: newCall.status,
-      });
-    }
-  } catch (error) {
-    // Log the full error for debugging
-    console.error('Error processing call status webhook:', error);
-
-    // Check for specific Prisma errors
-    if (error instanceof Error) {
-      // Handle unique constraint violations or other known errors
-      if (error.message.includes('Unique constraint')) {
+      if (!isValid) {
+        console.error('Invalid Twilio signature for status callback', {
+          callSid: payload.CallSid,
+        });
         return NextResponse.json(
-          {
-            error: 'Call already exists',
-            code: 'DUPLICATE_CALL',
-          },
-          { status: 409 }
+          { error: 'Invalid signature', code: 'INVALID_SIGNATURE' },
+          { status: 401 }
         );
       }
+    } else if (process.env.NODE_ENV === 'production') {
+      // In production, signature validation is required
+      console.error('Missing Twilio signature or auth token in production');
+      return NextResponse.json(
+        { error: 'Signature validation required', code: 'MISSING_SIGNATURE' },
+        { status: 401 }
+      );
     }
 
-    return NextResponse.json(
-      {
-        error: 'Failed to process call status update',
-        code: 'INTERNAL_ERROR',
+    // Map Twilio status to our enum
+    const newStatus = mapTwilioStatusToCallStatus(payload.CallStatus);
+    const duration = payload.CallDuration ? parseInt(payload.CallDuration, 10) : undefined;
+
+    // Log the status transition for debugging
+    console.log('Twilio status callback received:', {
+      callSid: payload.CallSid,
+      twilioStatus: payload.CallStatus,
+      mappedStatus: newStatus,
+      duration,
+    });
+
+    // Find the call by Twilio SID
+    const existingCall = await prisma.call.findUnique({
+      where: { twilioSid: payload.CallSid },
+      select: { id: true, status: true },
+    });
+
+    if (!existingCall) {
+      // Call not found - this could happen if:
+      // 1. The incoming call webhook hasn't been processed yet
+      // 2. The call was never created in our system
+      console.warn('Call not found for status update:', {
+        callSid: payload.CallSid,
+        status: payload.CallStatus,
+      });
+
+      // Return 200 to acknowledge receipt (Twilio expects this)
+      // The incoming call handler should create the call record
+      return NextResponse.json(
+        { error: 'Call not found', code: 'CALL_NOT_FOUND' },
+        { status: 404 }
+      );
+    }
+
+    const previousStatus = existingCall.status;
+
+    // Update the call status and duration
+    const updatedCall = await prisma.call.update({
+      where: { twilioSid: payload.CallSid },
+      data: {
+        status: newStatus,
+        // Only update duration if provided and call is completed
+        ...(duration !== undefined &&
+          newStatus === CallStatus.COMPLETED && { duration }),
       },
+      select: { id: true, status: true, duration: true },
+    });
+
+    console.log('Call status updated:', {
+      callId: updatedCall.id,
+      previousStatus,
+      newStatus: updatedCall.status,
+      duration: updatedCall.duration,
+    });
+
+    return NextResponse.json({
+      success: true,
+      callId: updatedCall.id,
+      previousStatus,
+      newStatus: updatedCall.status,
+      duration: updatedCall.duration ?? undefined,
+    });
+  } catch (error) {
+    console.error('Error processing Twilio status callback:', error);
+    return NextResponse.json(
+      { error: 'Internal server error', code: 'INTERNAL_ERROR' },
       { status: 500 }
     );
   }

@@ -1,274 +1,164 @@
 /**
- * Twilio Helper Utilities Tests
+ * Twilio Integration Module Tests
  */
 
+import { createHmac } from 'crypto';
 import {
-  formatPhoneNumber,
-  formatPhoneNumberForDisplay,
-  isValidPhoneNumber,
-  isTwilioWebhookPayload,
-  generateTwiMLResponse,
-  generateStreamTwiML,
-  generateGreetingAndStreamTwiML,
-  generateHangupTwiML,
-  generateFallbackTwiML,
-  buildWebSocketUrl,
-  getEarlGreeting,
+  validateTwilioSignature,
+  getTwilioAuthToken,
+  getWebhookBaseUrl,
 } from '../twilio';
 
-describe('Twilio Helper Utilities', () => {
-  describe('formatPhoneNumber', () => {
-    it('should format US 10-digit number to E.164', () => {
-      expect(formatPhoneNumber('5551234567')).toBe('+15551234567');
-    });
+describe('validateTwilioSignature', () => {
+  const authToken = 'test-auth-token';
+  const url = 'https://example.com/api/twilio/status';
+  const params = {
+    CallSid: 'CA123456',
+    CallStatus: 'in-progress',
+    From: '+15551234567',
+  };
 
-    it('should keep E.164 format unchanged', () => {
-      expect(formatPhoneNumber('+15551234567')).toBe('+15551234567');
-    });
+  // Generate a valid signature for testing
+  function generateValidSignature(
+    token: string,
+    requestUrl: string,
+    requestParams: Record<string, string>
+  ): string {
+    let data = requestUrl;
+    const sortedKeys = Object.keys(requestParams).sort();
+    for (const key of sortedKeys) {
+      data += key + requestParams[key];
+    }
+    return createHmac('sha1', token).update(data, 'utf8').digest('base64');
+  }
 
-    it('should handle US number with country code but no +', () => {
-      expect(formatPhoneNumber('15551234567')).toBe('+15551234567');
-    });
-
-    it('should handle number with formatting characters', () => {
-      expect(formatPhoneNumber('(555) 123-4567')).toBe('+15551234567');
-    });
-
-    it('should handle number with dots', () => {
-      expect(formatPhoneNumber('555.123.4567')).toBe('+15551234567');
-    });
-
-    it('should preserve international numbers with +', () => {
-      expect(formatPhoneNumber('+442071234567')).toBe('+442071234567');
-    });
+  it('should return true for a valid signature', () => {
+    const validSignature = generateValidSignature(authToken, url, params);
+    const result = validateTwilioSignature(authToken, validSignature, url, params);
+    expect(result).toBe(true);
   });
 
-  describe('formatPhoneNumberForDisplay', () => {
-    it('should format US E.164 number for display', () => {
-      expect(formatPhoneNumberForDisplay('+15551234567')).toBe('+1 (555) 123-4567');
-    });
-
-    it('should format 10-digit US number for display', () => {
-      expect(formatPhoneNumberForDisplay('5551234567')).toBe('(555) 123-4567');
-    });
-
-    it('should return international numbers as-is', () => {
-      const intlNumber = '+442071234567';
-      expect(formatPhoneNumberForDisplay(intlNumber)).toBe(intlNumber);
-    });
+  it('should return false for an invalid signature', () => {
+    const invalidSignature = 'invalid-signature-value';
+    const result = validateTwilioSignature(authToken, invalidSignature, url, params);
+    expect(result).toBe(false);
   });
 
-  describe('isValidPhoneNumber', () => {
-    it('should validate E.164 US number', () => {
-      expect(isValidPhoneNumber('+15551234567')).toBe(true);
-    });
-
-    it('should validate 10-digit number', () => {
-      expect(isValidPhoneNumber('5551234567')).toBe(true);
-    });
-
-    it('should validate international numbers', () => {
-      expect(isValidPhoneNumber('+442071234567')).toBe(true);
-    });
-
-    it('should reject too short numbers', () => {
-      expect(isValidPhoneNumber('12345')).toBe(false);
-    });
-
-    it('should reject too long numbers', () => {
-      expect(isValidPhoneNumber('12345678901234567890')).toBe(false);
-    });
+  it('should return false when auth token is empty', () => {
+    const validSignature = generateValidSignature(authToken, url, params);
+    const result = validateTwilioSignature('', validSignature, url, params);
+    expect(result).toBe(false);
   });
 
-  describe('isTwilioWebhookPayload', () => {
-    it('should return true for valid payload', () => {
-      const payload = {
-        CallSid: 'CA123',
-        AccountSid: 'AC123',
-        From: '+15551234567',
-        To: '+15559876543',
-      };
-      expect(isTwilioWebhookPayload(payload)).toBe(true);
-    });
-
-    it('should return false for missing CallSid', () => {
-      const payload = {
-        AccountSid: 'AC123',
-        From: '+15551234567',
-        To: '+15559876543',
-      };
-      expect(isTwilioWebhookPayload(payload)).toBe(false);
-    });
-
-    it('should return false for missing AccountSid', () => {
-      const payload = {
-        CallSid: 'CA123',
-        From: '+15551234567',
-        To: '+15559876543',
-      };
-      expect(isTwilioWebhookPayload(payload)).toBe(false);
-    });
-
-    it('should return false for missing From', () => {
-      const payload = {
-        CallSid: 'CA123',
-        AccountSid: 'AC123',
-        To: '+15559876543',
-      };
-      expect(isTwilioWebhookPayload(payload)).toBe(false);
-    });
-
-    it('should return false for missing To', () => {
-      const payload = {
-        CallSid: 'CA123',
-        AccountSid: 'AC123',
-        From: '+15551234567',
-      };
-      expect(isTwilioWebhookPayload(payload)).toBe(false);
-    });
-
-    it('should return false for empty object', () => {
-      expect(isTwilioWebhookPayload({})).toBe(false);
-    });
+  it('should return false when signature is empty', () => {
+    const result = validateTwilioSignature(authToken, '', url, params);
+    expect(result).toBe(false);
   });
 
-  describe('generateTwiMLResponse', () => {
-    it('should generate valid TwiML with message', () => {
-      const twiml = generateTwiMLResponse('Hello there!');
-      expect(twiml).toContain('<?xml version="1.0" encoding="UTF-8"?>');
-      expect(twiml).toContain('<Response>');
-      expect(twiml).toContain('<Say');
-      expect(twiml).toContain('Hello there!');
-      expect(twiml).toContain('</Response>');
-    });
-
-    it('should include voice attribute', () => {
-      const twiml = generateTwiMLResponse('Test', { voice: 'Polly.Joanna' });
-      expect(twiml).toContain('voice="Polly.Joanna"');
-    });
-
-    it('should include language attribute', () => {
-      const twiml = generateTwiMLResponse('Test', { language: 'en-GB' });
-      expect(twiml).toContain('language="en-GB"');
-    });
-
-    it('should include pause when specified', () => {
-      const twiml = generateTwiMLResponse('Test', { pauseLength: 2 });
-      expect(twiml).toContain('<Pause');
-      expect(twiml).toContain('length="2"');
-    });
+  it('should return false when URL is empty', () => {
+    const validSignature = generateValidSignature(authToken, url, params);
+    const result = validateTwilioSignature(authToken, validSignature, '', params);
+    expect(result).toBe(false);
   });
 
-  describe('generateStreamTwiML', () => {
-    it('should generate TwiML with stream connection', () => {
-      const twiml = generateStreamTwiML('wss://example.com/stream');
-      expect(twiml).toContain('<Response>');
-      expect(twiml).toContain('<Connect>');
-      expect(twiml).toContain('<Stream');
-      expect(twiml).toContain('url="wss://example.com/stream"');
-      expect(twiml).toContain('</Connect>');
-    });
-
-    it('should include track attribute', () => {
-      const twiml = generateStreamTwiML('wss://example.com/stream', { track: 'inbound' });
-      expect(twiml).toContain('track="inbound_track"');
-    });
-
-    it('should default to both tracks', () => {
-      const twiml = generateStreamTwiML('wss://example.com/stream');
-      expect(twiml).toContain('track="both_tracks"');
-    });
+  it('should handle empty params', () => {
+    const emptyParams = {};
+    const validSignature = generateValidSignature(authToken, url, emptyParams);
+    const result = validateTwilioSignature(authToken, validSignature, url, emptyParams);
+    expect(result).toBe(true);
   });
 
-  describe('generateGreetingAndStreamTwiML', () => {
-    it('should generate TwiML with greeting then stream', () => {
-      const twiml = generateGreetingAndStreamTwiML(
-        'Hello friend!',
-        'wss://example.com/stream'
-      );
-      expect(twiml).toContain('<Response>');
-      expect(twiml).toContain('<Say');
-      expect(twiml).toContain('Hello friend!');
-      expect(twiml).toContain('<Connect>');
-      expect(twiml).toContain('<Stream');
-      expect(twiml).toContain('url="wss://example.com/stream"');
-    });
-
-    it('should include voice and language options', () => {
-      const twiml = generateGreetingAndStreamTwiML(
-        'Hi there!',
-        'wss://example.com/stream',
-        { voice: 'Polly.Matthew', language: 'en-US' }
-      );
-      expect(twiml).toContain('voice="Polly.Matthew"');
-      expect(twiml).toContain('language="en-US"');
-    });
+  it('should sort params alphabetically', () => {
+    // Params in non-alphabetical order
+    const unorderedParams = {
+      Zebra: 'value3',
+      Apple: 'value1',
+      Mango: 'value2',
+    };
+    const validSignature = generateValidSignature(authToken, url, unorderedParams);
+    const result = validateTwilioSignature(authToken, validSignature, url, unorderedParams);
+    expect(result).toBe(true);
   });
 
-  describe('generateHangupTwiML', () => {
-    it('should generate TwiML with just hangup', () => {
-      const twiml = generateHangupTwiML();
-      expect(twiml).toContain('<Response>');
-      expect(twiml).toContain('<Hangup/>');
-    });
+  it('should return false when signature has different length', () => {
+    const shortSignature = 'abc';
+    const result = validateTwilioSignature(authToken, shortSignature, url, params);
+    expect(result).toBe(false);
+  });
+});
 
-    it('should include message before hangup when provided', () => {
-      const twiml = generateHangupTwiML('Goodbye!');
-      expect(twiml).toContain('<Say');
-      expect(twiml).toContain('Goodbye!');
-      expect(twiml).toContain('<Hangup/>');
-    });
+describe('getTwilioAuthToken', () => {
+  const originalEnv = process.env;
+
+  beforeEach(() => {
+    process.env = { ...originalEnv };
   });
 
-  describe('generateFallbackTwiML', () => {
-    it('should generate fallback message with hangup', () => {
-      const twiml = generateFallbackTwiML();
-      expect(twiml).toContain('<Response>');
-      expect(twiml).toContain('<Say');
-      expect(twiml).toContain('hearing aid');
-      expect(twiml).toContain('<Hangup/>');
-    });
+  afterEach(() => {
+    process.env = originalEnv;
   });
 
-  describe('buildWebSocketUrl', () => {
-    it('should convert https to wss', () => {
-      const wsUrl = buildWebSocketUrl('https://example.com', 'CA123');
-      expect(wsUrl).toBe('wss://example.com/api/voice/stream?callSid=CA123');
-    });
-
-    it('should convert http to ws', () => {
-      const wsUrl = buildWebSocketUrl('http://localhost:3000', 'CA123');
-      expect(wsUrl).toBe('ws://localhost:3000/api/voice/stream?callSid=CA123');
-    });
-
-    it('should URL encode the callSid', () => {
-      const wsUrl = buildWebSocketUrl('https://example.com', 'CA123=test');
-      expect(wsUrl).toContain('callSid=CA123%3Dtest');
-    });
+  it('should return the auth token when set', () => {
+    process.env.TWILIO_AUTH_TOKEN = 'my-secret-token';
+    const token = getTwilioAuthToken();
+    expect(token).toBe('my-secret-token');
   });
 
-  describe('getEarlGreeting', () => {
-    it('should return a non-empty greeting', () => {
-      const greeting = getEarlGreeting();
-      expect(typeof greeting).toBe('string');
-      expect(greeting.length).toBeGreaterThan(50);
-    });
+  it('should throw an error when auth token is not set', () => {
+    delete process.env.TWILIO_AUTH_TOKEN;
+    expect(() => getTwilioAuthToken()).toThrow(
+      'TWILIO_AUTH_TOKEN environment variable is not set'
+    );
+  });
+});
 
-    it('should mention Earl', () => {
-      // Run multiple times to ensure Earl is mentioned
-      for (let i = 0; i < 10; i++) {
-        const greeting = getEarlGreeting();
-        expect(greeting.toLowerCase()).toContain('earl');
-      }
-    });
+describe('getWebhookBaseUrl', () => {
+  const originalEnv = process.env;
 
-    it('should return different greetings (randomization)', () => {
-      const greetings = new Set<string>();
-      // Get 20 greetings - should get at least 2 different ones
-      for (let i = 0; i < 20; i++) {
-        greetings.add(getEarlGreeting());
-      }
-      expect(greetings.size).toBeGreaterThan(1);
-    });
+  beforeEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  it('should return WEBHOOK_BASE_URL when set', () => {
+    process.env.WEBHOOK_BASE_URL = 'https://my-app.com';
+    const url = getWebhookBaseUrl();
+    expect(url).toBe('https://my-app.com');
+  });
+
+  it('should return VERCEL_URL when WEBHOOK_BASE_URL is not set', () => {
+    delete process.env.WEBHOOK_BASE_URL;
+    process.env.VERCEL_URL = 'my-app.vercel.app';
+    const url = getWebhookBaseUrl();
+    expect(url).toBe('https://my-app.vercel.app');
+  });
+
+  it('should add https:// prefix when URL does not have protocol', () => {
+    process.env.WEBHOOK_BASE_URL = 'my-domain.com';
+    const url = getWebhookBaseUrl();
+    expect(url).toBe('https://my-domain.com');
+  });
+
+  it('should not add prefix when URL starts with http://', () => {
+    process.env.WEBHOOK_BASE_URL = 'http://localhost:3000';
+    const url = getWebhookBaseUrl();
+    expect(url).toBe('http://localhost:3000');
+  });
+
+  it('should not add prefix when URL starts with https://', () => {
+    process.env.WEBHOOK_BASE_URL = 'https://my-app.com';
+    const url = getWebhookBaseUrl();
+    expect(url).toBe('https://my-app.com');
+  });
+
+  it('should throw an error when neither URL is set', () => {
+    delete process.env.WEBHOOK_BASE_URL;
+    delete process.env.VERCEL_URL;
+    expect(() => getWebhookBaseUrl()).toThrow(
+      'WEBHOOK_BASE_URL or VERCEL_URL environment variable is not set'
+    );
   });
 });

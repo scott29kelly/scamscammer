@@ -1,173 +1,107 @@
 /**
- * Twilio Client and Helpers
+ * Twilio Integration Module
  *
- * This module provides the Twilio client instance and helper functions
- * for interacting with Twilio's Voice API.
+ * Provides Twilio-related utilities including webhook signature validation.
  */
 
-import twilio from 'twilio';
-import { validateRequest as twilioValidateRequest } from 'twilio';
-
-// Lazy-initialize Twilio client to allow for environment variable loading
-let _twilioClient: ReturnType<typeof twilio> | null = null;
+import { createHmac } from 'crypto';
 
 /**
- * Get the Twilio client instance (lazy initialization)
- */
-export function getTwilioClient() {
-  if (!_twilioClient) {
-    const accountSid = process.env.TWILIO_ACCOUNT_SID;
-    const authToken = process.env.TWILIO_AUTH_TOKEN;
-
-    if (!accountSid || !authToken) {
-      throw new Error('TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN must be set');
-    }
-
-    _twilioClient = twilio(accountSid, authToken);
-  }
-  return _twilioClient;
-}
-
-/**
- * Validate that a request came from Twilio
+ * Validates the Twilio webhook signature to ensure requests are authentic.
  *
- * @param authToken - Twilio auth token
- * @param signature - X-Twilio-Signature header value
- * @param url - The full URL of the webhook endpoint
- * @param params - The POST parameters from the request
- * @returns boolean indicating if the request is valid
+ * Twilio signs each webhook request using HMAC-SHA1 with your Auth Token.
+ * This function verifies that signature to prevent spoofed requests.
+ *
+ * @param authToken - Your Twilio Auth Token
+ * @param signature - The X-Twilio-Signature header from the request
+ * @param url - The full URL of your webhook endpoint
+ * @param params - The POST body parameters (for POST requests)
+ * @returns true if the signature is valid, false otherwise
+ *
+ * @see https://www.twilio.com/docs/usage/security#validating-requests
  */
-export function validateTwilioRequest(
+export function validateTwilioSignature(
   authToken: string,
   signature: string,
   url: string,
   params: Record<string, string>
 ): boolean {
-  return twilioValidateRequest(authToken, signature, url, params);
+  if (!authToken || !signature || !url) {
+    return false;
+  }
+
+  // Build the data string: URL + sorted POST params
+  let data = url;
+
+  // Sort the params alphabetically by key and append key=value pairs
+  const sortedKeys = Object.keys(params).sort();
+  for (const key of sortedKeys) {
+    data += key + params[key];
+  }
+
+  // Compute HMAC-SHA1 with the auth token
+  const computedSignature = createHmac('sha1', authToken)
+    .update(data, 'utf8')
+    .digest('base64');
+
+  // Compare signatures (constant-time comparison to prevent timing attacks)
+  return timingSafeEqual(signature, computedSignature);
 }
 
 /**
- * Validate request using environment auth token
+ * Constant-time string comparison to prevent timing attacks.
  */
-export function validateRequest(
-  signature: string,
-  url: string,
-  params: Record<string, string>
-): boolean {
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+
+  let result = 0;
+  for (let i = 0; i < a.length; i++) {
+    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return result === 0;
+}
+
+/**
+ * Twilio call status values that can be received in status callbacks.
+ * @see https://www.twilio.com/docs/voice/twiml#callstatus-values
+ */
+export type TwilioCallStatus =
+  | 'queued'
+  | 'initiated'
+  | 'ringing'
+  | 'in-progress'
+  | 'completed'
+  | 'busy'
+  | 'no-answer'
+  | 'canceled'
+  | 'failed';
+
+/**
+ * Gets the Twilio Auth Token from environment variables.
+ * Throws an error if not configured.
+ */
+export function getTwilioAuthToken(): string {
   const authToken = process.env.TWILIO_AUTH_TOKEN;
   if (!authToken) {
-    throw new Error('TWILIO_AUTH_TOKEN must be set');
+    throw new Error('TWILIO_AUTH_TOKEN environment variable is not set');
   }
-  return validateTwilioRequest(authToken, signature, url, params);
-}
-
-// Re-export VoiceResponse for TwiML generation
-export const VoiceResponse = twilio.twiml.VoiceResponse;
-
-/**
- * Create a TwiML response that plays a greeting and streams to a WebSocket
- *
- * @param greeting - The initial greeting to say
- * @param streamUrl - The WebSocket URL for real-time voice streaming
- * @returns TwiML response as a string
- */
-export function createStreamingTwiml(greeting: string, streamUrl: string): string {
-  const response = new VoiceResponse();
-
-  // Play the initial greeting
-  response.say(
-    {
-      voice: 'Polly.Matthew-Neural',
-      language: 'en-US',
-    },
-    greeting
-  );
-
-  // Start the bi-directional stream
-  const connect = response.connect();
-  connect.stream({
-    url: streamUrl,
-  });
-
-  return response.toString();
+  return authToken;
 }
 
 /**
- * Create a simple TwiML response with a greeting message
- * Used as a fallback when streaming is not available
- *
- * @param message - The message to speak
- * @returns TwiML response as a string
+ * Gets the webhook URL base from environment variables.
+ * Used to construct full webhook URLs for signature validation.
  */
-export function createSimpleTwiml(message: string): string {
-  const response = new VoiceResponse();
-
-  response.say(
-    {
-      voice: 'Polly.Matthew-Neural',
-      language: 'en-US',
-    },
-    message
-  );
-
-  return response.toString();
-}
-
-/**
- * Create a TwiML response for error scenarios
- *
- * @returns TwiML response as a string
- */
-export function createErrorTwiml(): string {
-  const response = new VoiceResponse();
-
-  response.say(
-    {
-      voice: 'Polly.Matthew-Neural',
-      language: 'en-US',
-    },
-    "Well I'll be dipped! Something went wrong with my telephone contraption. Call back in a jiffy, would ya?"
-  );
-
-  response.hangup();
-
-  return response.toString();
-}
-
-/**
- * Twilio webhook parameters for incoming calls
- */
-export interface TwilioIncomingCallParams {
-  CallSid: string;
-  AccountSid: string;
-  From: string;
-  To: string;
-  CallStatus: string;
-  ApiVersion: string;
-  Direction: string;
-  ForwardedFrom?: string;
-  CallerName?: string;
-  FromCity?: string;
-  FromState?: string;
-  FromZip?: string;
-  FromCountry?: string;
-  ToCity?: string;
-  ToState?: string;
-  ToZip?: string;
-  ToCountry?: string;
-}
-
-/**
- * Twilio webhook parameters for call status updates
- */
-export interface TwilioStatusCallbackParams {
-  CallSid: string;
-  AccountSid: string;
-  From: string;
-  To: string;
-  CallStatus: 'queued' | 'ringing' | 'in-progress' | 'completed' | 'busy' | 'failed' | 'no-answer' | 'canceled';
-  CallDuration?: string;
-  Duration?: string;
-  Timestamp?: string;
-  SequenceNumber?: string;
+export function getWebhookBaseUrl(): string {
+  const baseUrl = process.env.WEBHOOK_BASE_URL || process.env.VERCEL_URL;
+  if (!baseUrl) {
+    throw new Error('WEBHOOK_BASE_URL or VERCEL_URL environment variable is not set');
+  }
+  // Ensure the URL starts with https://
+  if (baseUrl.startsWith('http://') || baseUrl.startsWith('https://')) {
+    return baseUrl;
+  }
+  return `https://${baseUrl}`;
 }

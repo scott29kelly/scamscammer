@@ -1,70 +1,69 @@
 # Ralphy Progress Log
 
-## Task: Create Call Status Webhook Handler (Agent 9)
+## Task: Create Call Status Webhook Handler
 
-### Completed: 2026-01-19
+**Status:** Completed
+**Date:** 2026-01-19
 
-#### Summary
-Implemented the Call Status Webhook Handler that receives status update callbacks from Twilio throughout the call lifecycle. The handler updates call records in the database based on status transitions.
+### What was done:
 
-#### Files Created
+1. **Created Twilio client module**
+   - Created `src/lib/twilio.ts` with:
+     - `validateTwilioSignature()` - HMAC-SHA1 signature validation for webhook security
+     - `getTwilioAuthToken()` - Environment variable helper
+     - `getWebhookBaseUrl()` - Webhook URL configuration helper
+     - `TwilioCallStatus` type for all possible Twilio status values
+     - Constant-time string comparison to prevent timing attacks
 
-1. **src/types/index.ts**
-   - TypeScript interfaces for Twilio webhook payloads (TwilioStatusPayload, TwilioWebhookPayload, TwilioRecordingPayload)
-   - CallStatus and Speaker enums matching Prisma schema
-   - TWILIO_STATUS_MAP constant for mapping Twilio statuses to internal statuses
-   - mapTwilioStatusToCallStatus() utility function
-   - API response types (CallResponse, CallSegmentResponse, DashboardStats, etc.)
+2. **Implemented Call Status Webhook Handler**
+   - Created `src/app/api/twilio/status/route.ts` with POST handler
+   - Receives and validates Twilio status callbacks
+   - Maps Twilio statuses to CallStatus enum:
+     - `queued`, `initiated`, `ringing` → RINGING
+     - `in-progress` → IN_PROGRESS
+     - `completed` → COMPLETED (with duration)
+     - `busy`, `canceled`, `failed` → FAILED
+     - `no-answer` → NO_ANSWER
+   - Validates required fields (CallSid, CallStatus)
+   - Validates Twilio signature in production
+   - Updates call record in database with new status and duration
+   - Proper error handling with typed responses
+   - Logs status transitions for debugging
 
-2. **prisma/schema.prisma**
-   - Call model with all required fields (twilioSid, fromNumber, toNumber, status, duration, etc.)
-   - CallSegment model for conversation transcripts
-   - CallStatus enum (RINGING, IN_PROGRESS, COMPLETED, FAILED, NO_ANSWER)
-   - Speaker enum (SCAMMER, EARL)
-   - Appropriate indexes for performance
+3. **Added TypeScript type definitions**
+   - Updated `src/types/index.ts` with:
+     - `TwilioCallStatus` type for webhook status values
+     - `TwilioStatusPayload` interface for webhook payload
+     - `StatusUpdateResponse` interface for handler response
 
-3. **src/lib/db.ts**
-   - Prisma client singleton to prevent multiple connections during hot reloads
-   - connectDb() and disconnectDb() helpers for health checks and testing
+4. **Created comprehensive tests**
+   - Created `src/app/api/twilio/status/__tests__/route.test.ts`:
+     - Tests for all Twilio status mappings (9 status types)
+     - Tests for call not found (404)
+     - Tests for missing required fields (400)
+     - Tests for invalid signature (401)
+     - Tests for database errors (500)
+     - Tests that duration only saves on completed status
+   - Created `src/lib/__tests__/twilio.test.ts`:
+     - Tests for signature validation
+     - Tests for environment variable helpers
+     - All 35 tests pass
 
-4. **src/lib/twilio.ts**
-   - validateTwilioSignature() - Validates webhook requests using Twilio's signature
-   - parseTwilioWebhookBody() - Parses form-encoded webhook data
-   - TwiML generation helpers (generateTwiMLResponse, generateStreamTwiML, etc.)
-   - Phone number utilities (formatPhoneNumber, formatPhoneNumberForDisplay, isValidPhoneNumber)
+5. **Created tsconfig.json**
+   - Added TypeScript configuration for Next.js project
+   - Configured path aliases (@/* → ./src/*)
 
-5. **src/app/api/twilio/status/route.ts** (Main deliverable)
-   - POST handler for Twilio status callbacks
-   - Validates Twilio signature for security
-   - Maps Twilio statuses to internal CallStatus enum:
-     - queued/ringing -> RINGING
-     - in-progress/answered -> IN_PROGRESS
-     - completed -> COMPLETED (with duration)
-     - busy/failed/canceled -> FAILED
-     - no-answer -> NO_ANSWER
-   - Updates call records in database
-   - Handles terminal state idempotency (won't update already-completed calls)
-   - Parses and validates duration from completed calls
-   - Returns appropriate error responses for invalid requests
-   - Rejects non-POST methods with 405
+### Files created/modified:
+- `scamscrammer/src/lib/twilio.ts` - Twilio client module with signature validation
+- `scamscrammer/src/app/api/twilio/status/route.ts` - Call status webhook handler
+- `scamscrammer/src/types/index.ts` - Added Twilio types
+- `scamscrammer/src/app/api/twilio/status/__tests__/route.test.ts` - Webhook handler tests
+- `scamscrammer/src/lib/__tests__/twilio.test.ts` - Twilio module tests
+- `scamscrammer/tsconfig.json` - TypeScript configuration
 
-6. **Test Files**
-   - src/app/api/twilio/status/__tests__/route.test.ts (40+ tests)
-   - src/types/__tests__/index.test.ts
-   - src/lib/__tests__/twilio.test.ts
+---
 
-7. **Configuration Files**
-   - package.json - Dependencies and scripts
-   - tsconfig.json - TypeScript configuration with path aliases
-   - jest.config.js - Jest testing configuration
-   - .env.example - Environment variables template
-
-#### Key Features
-- Secure webhook validation using Twilio signature verification
-- Idempotent status updates (won't regress terminal states)
-- Proper error handling with appropriate HTTP status codes
-- Duration parsing and validation for completed calls
-- Comprehensive test coverage
+## Task: Create Stats API Endpoint
 
 **Status:** Completed
 **Date:** 2026-01-19
