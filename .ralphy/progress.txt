@@ -136,3 +136,73 @@
 - `scamscrammer/jest.config.mjs` - Jest configuration
 - `scamscrammer/jest.setup.js` - Jest setup
 - `scamscrammer/package.json` - Added test scripts and dependencies
+
+---
+
+## Task: Implement Twilio Client and Helpers
+
+**Status:** Completed
+**Date:** 2026-01-19
+
+### What was done:
+
+1. **Installed Twilio SDK**
+   - Added `twilio` package to dependencies
+   - Added `@types/twilio` to devDependencies
+
+2. **Created Twilio Client Module**
+   - Created `src/lib/twilio.ts` with comprehensive Twilio integration
+   - Implemented `TwilioClient` class wrapping the Twilio SDK
+
+3. **TwilioClient Class Methods:**
+   - `constructor(config?)` - Creates client from env vars or explicit config
+   - `getClient()` - Returns underlying Twilio client for advanced operations
+   - `getPhoneNumber()` - Returns configured phone number
+   - `generateTwiMLResponse(options)` - Generates TwiML for voice messages
+   - `generateStreamTwiML(options)` - Generates TwiML for WebSocket media streaming
+   - `generateRecordingTwiML(options)` - Generates TwiML for call recording
+   - `generateFullCallTwiML(options)` - Combined TwiML for greeting, recording, and streaming
+   - `getCallDetails(callSid)` - Fetches call details from Twilio API
+   - `getRecording(recordingSid)` - Fetches recording details from Twilio API
+   - `getRecordingUrl(recordingSid)` - Returns recording download URL
+   - `downloadRecording(recordingSid)` - Downloads recording as Buffer
+   - `listRecordingsForCall(callSid)` - Lists all recordings for a call
+   - `endCall(callSid)` - Terminates an active call
+
+4. **Helper Functions:**
+   - `validateTwilioSignature(authToken, signature, url, params)` - Validates webhook signatures
+   - `validateTwilioWebhook(request, body)` - Validates webhooks from NextJS request
+   - `formatPhoneNumber(phoneNumber, defaultCountryCode)` - Formats to E.164 format
+   - `parsePhoneNumber(phoneNumber)` - Parses number into components (country, area, local)
+   - `isValidPhoneNumber(phoneNumber)` - Validates phone number format
+   - `maskPhoneNumber(phoneNumber)` - Masks number for privacy (show last 4 digits)
+   - `mapTwilioStatus(twilioStatus)` - Maps Twilio status to internal CallStatus enum
+   - `parseTwilioFormData(request)` - Parses form data from webhook requests
+
+5. **Singleton Pattern:**
+   - `getTwilioClient()` - Returns singleton TwilioClient instance
+   - `resetTwilioClient()` - Resets singleton (useful for testing)
+
+6. **Type Definitions:**
+   - `TwilioConfig` - Configuration interface
+   - `StreamTwiMLOptions` - Options for stream TwiML generation
+   - `VoiceTwiMLOptions` - Options for voice TwiML generation
+   - `CallDetails` - Call information returned from API
+   - `RecordingDetails` - Recording information returned from API
+
+7. **Comprehensive Test Suite:**
+   - Created `src/lib/__tests__/twilio.test.ts`
+   - 42 tests covering all functionality:
+     - TwilioClient constructor tests (env vars, explicit config, error handling)
+     - TwiML generation tests (voice, stream, recording)
+     - Signature validation tests
+     - Phone number formatting/parsing/validation tests
+     - Status mapping tests (all Twilio statuses)
+     - Form data parsing tests
+     - Singleton pattern tests
+   - All 42 tests pass
+
+### Files created/modified:
+- `scamscrammer/src/lib/twilio.ts` - Twilio client and helpers module (new)
+- `scamscrammer/src/lib/__tests__/twilio.test.ts` - Comprehensive test suite (new)
+- `scamscrammer/package.json` - Added twilio and @types/twilio dependencies
