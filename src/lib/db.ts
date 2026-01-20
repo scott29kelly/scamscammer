@@ -1,30 +1,36 @@
+/**
+ * Database Client - Prisma Singleton
+ *
+ * This module provides a singleton instance of the Prisma client
+ * to prevent connection exhaustion during development with hot reloading.
+ */
+
 import { PrismaClient } from "@prisma/client";
 
-// Declare global type for the Prisma client to prevent multiple instances in development
+// Declare global type for the prisma singleton
 declare global {
   // eslint-disable-next-line no-var
   var prisma: PrismaClient | undefined;
 }
 
-// Create a singleton instance of the Prisma client
-// In development, we store it on the global object to prevent multiple instances
-// due to hot reloading. In production, we create a new instance.
-function createPrismaClient(): PrismaClient {
-  return new PrismaClient({
-    // In Prisma 7+, database URL is configured via prisma.config.ts
-    // The adapter/datasource configuration is handled there
+/**
+ * Prisma client singleton instance.
+ *
+ * In development, we store the client on the global object to prevent
+ * multiple instances from being created during hot module replacement.
+ *
+ * In production, we create a new instance each time the module is loaded.
+ */
+export const prisma =
+  globalThis.prisma ??
+  new PrismaClient({
     log:
       process.env.NODE_ENV === "development"
         ? ["query", "error", "warn"]
         : ["error"],
   });
-}
 
-export const prisma = globalThis.prisma ?? createPrismaClient();
-
-// Store on global in development to prevent multiple instances
+// Store on global in development to prevent hot reload issues
 if (process.env.NODE_ENV !== "production") {
   globalThis.prisma = prisma;
 }
-
-export default prisma;

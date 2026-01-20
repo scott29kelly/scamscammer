@@ -1,5 +1,5 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
+// Prisma Schema for ScamScrammer
+// This schema defines the database models for tracking scam calls
 
 generator client {
   provider = "prisma-client-js"
@@ -7,39 +7,36 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
-// Call status enum - tracks the lifecycle of a call
-enum CallStatus {
-  RINGING
-  IN_PROGRESS
-  COMPLETED
-  FAILED
-  NO_ANSWER
-}
-
-// Speaker enum - identifies who is speaking in a call segment
-enum Speaker {
-  SCAMMER
-  EARL
-}
-
-// Call model - stores metadata for each intercepted scam call
+/// A record of an incoming scam call handled by Earl
 model Call {
-  id            String      @id @default(cuid())
-  twilioSid     String      @unique // Twilio call SID for tracking
-  fromNumber    String      // Caller's phone number
-  toNumber      String      // Our Twilio phone number
-  status        CallStatus  @default(RINGING)
-  duration      Int?        // Call duration in seconds
-  recordingUrl  String?     // URL to the call recording in S3
-  transcriptUrl String?     // URL to the transcript file
-  rating        Int?        // Entertainment value rating (1-5 stars)
-  notes         String?     // User notes about the call
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
+  id            String     @id @default(cuid())
+  /// Twilio's unique call identifier
+  twilioSid     String     @unique
+  /// Caller's phone number (E.164 format)
+  fromNumber    String
+  /// Our Twilio phone number (E.164 format)
+  toNumber      String
+  /// Current status of the call
+  status        CallStatus @default(RINGING)
+  /// Duration of the call in seconds
+  duration      Int?
+  /// S3 URL for the call recording
+  recordingUrl  String?
+  /// S3 URL for the transcript file
+  transcriptUrl String?
+  /// Entertainment value rating (1-5 stars)
+  rating        Int?
+  /// User notes about the call
+  notes         String?
+  /// When the call was received
+  createdAt     DateTime   @default(now())
+  /// Last update timestamp
+  updatedAt     DateTime   @updatedAt
 
-  // Relation to call segments (conversation turns)
+  /// Conversation segments (transcribed dialogue)
   segments CallSegment[]
 
   @@index([status])
@@ -47,16 +44,42 @@ model Call {
   @@index([fromNumber])
 }
 
-// CallSegment model - tracks individual conversation turns
+/// A segment of conversation from a call
 model CallSegment {
   id        String   @id @default(cuid())
+  /// Reference to the parent call
   callId    String
   call      Call     @relation(fields: [callId], references: [id], onDelete: Cascade)
-  speaker   Speaker  // Who is speaking (SCAMMER or EARL)
-  text      String   // Transcribed text of what was said
-  timestamp Int      // Seconds into the call when this segment occurred
+  /// Who spoke this segment
+  speaker   Speaker
+  /// Transcribed text content
+  text      String
+  /// Seconds into the call when this was spoken
+  timestamp Int
+  /// When this segment was created
   createdAt DateTime @default(now())
 
   @@index([callId])
-  @@index([timestamp])
+}
+
+/// Status of a call in the system
+enum CallStatus {
+  /// Call is ringing, not yet answered
+  RINGING
+  /// Call is in progress with Earl
+  IN_PROGRESS
+  /// Call completed successfully
+  COMPLETED
+  /// Call failed (error or disconnection)
+  FAILED
+  /// Call was not answered
+  NO_ANSWER
+}
+
+/// Speaker in a conversation segment
+enum Speaker {
+  /// The scam caller
+  SCAMMER
+  /// Our AI persona Earl
+  EARL
 }

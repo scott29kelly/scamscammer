@@ -1,204 +1,70 @@
 # Ralphy Progress Log
 
-## 2026-01-19: Implement Storage Service for Recordings
+## Task: Create Incoming Call Webhook Handler
 
-### Completed Tasks
+### Date: 2026-01-19
 
-1. **Created project structure**
-   - Set up src/lib, src/types, and src/app directories
-   - Created package.json with dependencies (Next.js 14, AWS SDK S3, Jest)
-   - Created tsconfig.json with TypeScript strict mode and path aliases
+### Summary
+Implemented the Twilio incoming call webhook handler (`/api/twilio/incoming`) which serves as the entry point for all incoming scam calls to the ScamScrammer system.
 
-2. **Created TypeScript type definitions** (`src/types/index.ts`)
-   - StoragePaginationOptions interface
-   - RecordingMetadata interface
-   - StorageListResult interface
-   - StorageConfig interface
-   - UploadResult interface
-   - StorageErrorCode enum
-   - Result and AsyncResult utility types
+### Files Created
 
-3. **Implemented StorageClient class** (`src/lib/storage.ts`)
-   Core methods:
-   - `uploadRecording(callId, audioBuffer, contentType?)` - Upload audio to S3
-   - `getRecordingUrl(callId, expiresIn?)` - Generate signed URLs for playback
-   - `deleteRecording(callId)` - Remove recordings from S3
-   - `listRecordings(options?)` - List recordings with pagination support
-   - `generateStorageKey(callId, date?)` - Consistent S3 key naming
+#### Core Implementation
+- `src/app/api/twilio/incoming/route.ts` - Main webhook handler
+  - POST handler for incoming Twilio calls
+  - Validates Twilio signature for security
+  - Creates call records in database with RINGING status
+  - Returns TwiML response with Earl's greeting and WebSocket stream connection
+  - Includes fallback TwiML for error scenarios
+  - OPTIONS handler for CORS preflight
 
-   Additional methods:
-   - `getRecordingUrlByKey(key, expiresIn?)` - Get URL by S3 key
-   - `deleteRecordingByKey(key)` - Delete by S3 key
-   - `recordingExists(callId)` - Check if recording exists
-   - `getRecordingMetadata(callId)` - Get recording metadata
-   - `downloadRecording(callId)` - Download as Buffer
+#### Supporting Infrastructure (Prerequisites)
+- `package.json` - Project dependencies (Next.js, Twilio, Prisma, etc.)
+- `tsconfig.json` - TypeScript configuration with strict mode
+- `next.config.ts` - Next.js configuration with CORS headers for Twilio webhooks
+- `jest.config.js` - Jest test configuration
+- `.env.example` - Environment variable template
 
-   Features:
-   - Singleton pattern with getStorageClient() and resetStorageClient()
-   - Environment variable support for AWS credentials
-   - Custom StorageError class with error codes
-   - Comprehensive error handling (quota exceeded, access denied, not found)
-   - S3 key format: recordings/{YYYY-MM-DD}/{callId}.wav
+#### Type Definitions
+- `src/types/index.ts` - Complete TypeScript interfaces including:
+  - TwilioWebhookPayload, TwilioStatusPayload, TwilioRecordingPayload
+  - CallStatus and Speaker enums
+  - API response types (CallResponse, CallListResponse)
+  - OpenAI Realtime API types
+  - Earl persona configuration types
+  - Storage and TwiML types
 
-4. **Created comprehensive unit tests** (`src/lib/__tests__/storage.test.ts`)
-   - 38 passing tests covering:
-     - Constructor configuration validation
-     - Key generation and extraction
-     - Upload, download, delete operations
-     - Listing with pagination
-     - Error handling for all error types
-     - Singleton behavior
-     - StorageError class
+#### Library Modules
+- `src/lib/db.ts` - Prisma client singleton
+- `src/lib/twilio.ts` - Twilio SDK wrapper with:
+  - Signature validation (validateTwilioSignature)
+  - TwiML generation (generateGreetingAndStreamTwiML, generateFallbackTwiML)
+  - Phone number formatting utilities
+  - Webhook payload type guards
+- `src/lib/persona.ts` - Earl AI persona configuration with:
+  - Complete system prompt for OpenAI
+  - Tangent topics, mishearings, signature phrases
+  - Helper functions (getEarlGreeting, getMishearing, etc.)
 
-### Files Created/Modified
-- `package.json` (new)
-- `tsconfig.json` (new)
-- `jest.config.js` (new)
-- `src/types/index.ts` (new)
-- `src/lib/storage.ts` (new)
-- `src/lib/__tests__/storage.test.ts` (new)
+#### Database Schema
+- `prisma/schema.prisma` - PostgreSQL schema with:
+  - Call model (twilioSid, fromNumber, toNumber, status, duration, etc.)
+  - CallSegment model (speaker, text, timestamp)
+  - CallStatus and Speaker enums
 
-### Files created/modified:
-- `scamscrammer/src/lib/persona.ts` - Earl AI persona configuration module (new)
-- `scamscrammer/src/lib/__tests__/persona.test.ts` - Persona tests (new)
-- `scamscrammer/src/types/index.ts` - Added Twilio, OpenAI, and Persona type definitions
+#### Tests
+- `src/app/api/twilio/incoming/__tests__/route.test.ts` - Webhook handler tests
+- `src/lib/__tests__/twilio.test.ts` - Twilio utility tests
+- `src/lib/__tests__/persona.test.ts` - Earl persona tests
 
----
+### Key Features
+1. **Security**: Validates X-Twilio-Signature header to ensure requests come from Twilio
+2. **Database Logging**: Creates call records immediately upon receiving calls
+3. **Graceful Degradation**: Returns fallback TwiML if database or other services fail
+4. **Earl Persona**: Randomized greetings from the Earl Pemberton character
+5. **WebSocket Integration**: TwiML connects caller to `/api/voice/stream` for real-time AI conversation
 
-## Task: Create Stats API Endpoint
-
-**Status:** Completed
-**Date:** 2026-01-19
-
-### What was done:
-
-1. **Set up Prisma ORM with PostgreSQL**
-   - Created `prisma/schema.prisma` with Call and CallSegment models
-   - Created `prisma.config.ts` for Prisma 7 configuration
-   - Installed `@prisma/client`, `@prisma/adapter-pg`, `pg`, and `dotenv`
-   - Generated Prisma client
-
-2. **Created database client singleton**
-   - Created `src/lib/db.ts` with Prisma client singleton pattern
-   - Configured for development hot-reload compatibility
-   - Uses `@prisma/adapter-pg` for Prisma 7 compatibility
-
-3. **Added TypeScript type definitions**
-   - Updated `src/types/index.ts` with:
-     - Re-exported Prisma types (Call, CallSegment, CallStatus, Speaker)
-     - ApiErrorResponse interface
-     - PaginationInfo interface
-     - CallListItem interface
-     - CallListResponse interface
-     - CallResponse interface
-     - DashboardStats interface
-
-4. **Implemented Stats API endpoint**
-   - Created `src/app/api/stats/route.ts` with GET handler
-   - Returns comprehensive dashboard statistics:
-     - `totalCalls` - total number of calls
-     - `totalDuration` - sum of all call durations (seconds)
-     - `averageDuration` - average call duration (rounded)
-     - `callsByStatus` - count per status (RINGING, IN_PROGRESS, COMPLETED, FAILED, NO_ANSWER)
-     - `callsByDay` - last 30 days with call counts (for charting)
-     - `topRatedCalls` - top 5 highest-rated calls
-     - `longestCalls` - top 5 longest duration calls
-   - Uses Prisma aggregations for efficiency (count, aggregate, groupBy, $queryRaw)
-   - All database queries run in parallel using Promise.all()
-   - Proper error handling with 500 response on failure
-
-5. **Set up Jest testing framework**
-   - Created `jest.config.mjs` with TypeScript support
-   - Created `jest.setup.js` for test configuration
-   - Added test and test:watch scripts to package.json
-   - Installed jest, ts-jest, @types/jest, and @testing-library/jest-dom
-
-6. **Created comprehensive tests**
-   - Created `src/app/api/stats/__tests__/route.test.ts`
-   - Tests cover:
-     - Successful response with mock data
-     - Empty database handling (all zeros/empty arrays)
-     - Database error handling (500 response)
-     - Missing days filled with zero counts
-   - All 4 tests pass
-
-### Files created/modified:
-- `scamscrammer/prisma/schema.prisma` - Database schema with Call, CallSegment models and enums
-- `scamscrammer/prisma.config.ts` - Prisma 7 configuration
-- `scamscrammer/src/lib/db.ts` - Prisma client singleton
-- `scamscrammer/src/types/index.ts` - TypeScript type definitions
-- `scamscrammer/src/app/api/stats/route.ts` - Stats API endpoint
-- `scamscrammer/src/app/api/stats/__tests__/route.test.ts` - API tests
-- `scamscrammer/jest.config.mjs` - Jest configuration
-- `scamscrammer/jest.setup.js` - Jest setup
-- `scamscrammer/package.json` - Added test scripts and dependencies
-
----
-
-## Task: Implement Storage Service for Recordings
-
-**Status:** Completed
-**Date:** 2026-01-19
-
-### What was done:
-
-1. **Installed AWS SDK Dependencies**
-   - Added `@aws-sdk/client-s3` for S3 operations
-   - Added `@aws-sdk/s3-request-presigner` for generating signed URLs
-
-2. **Created Storage Service Module**
-   - Created `src/lib/storage.ts` with complete S3-based storage implementation
-   - Follows singleton pattern consistent with existing db.ts
-
-3. **StorageClient Class Methods:**
-   - `uploadRecording(callId, audioBuffer, contentType)` - Upload recordings to S3
-   - `getRecordingUrl(callId, expiresIn)` - Generate signed URLs for secure download
-   - `deleteRecording(callId)` - Remove recordings from storage
-   - `listRecordings(options)` - List all recordings with pagination support
-   - `generateStorageKey(callId, extension)` - Consistent date-based key naming
-   - `recordingExists(callId)` - Check if recording exists
-   - `getRecordingMetadata(callId)` - Get recording metadata without downloading
-   - `extractCallIdFromKey(key)` - Extract call ID from S3 key
-
-4. **Key Features:**
-   - Date-based S3 key partitioning (`recordings/YYYY/MM/DD/callId.ext`)
-   - Support for multiple audio formats (wav, mp3, ogg, webm, flac)
-   - Presigned URL generation with configurable expiration
-   - Custom StorageError class with error codes
-   - IAM role support (credentials optional)
-   - Pagination support for listing recordings
-
-5. **TypeScript Interfaces Created:**
-   - `StorageConfig` - Configuration options
-   - `ListRecordingsOptions` - Pagination options for listing
-   - `RecordingMetadata` - Recording metadata structure
-   - `ListRecordingsResponse` - Paginated list response
-   - `UploadResult` - Upload operation result
-
-6. **Environment Variables Required:**
-   - `AWS_REGION` - AWS region (required)
-   - `AWS_BUCKET_NAME` - S3 bucket name (required)
-   - `AWS_ACCESS_KEY_ID` - AWS access key (optional, for non-IAM deployments)
-   - `AWS_SECRET_ACCESS_KEY` - AWS secret key (optional, for non-IAM deployments)
-
-7. **Convenience Export:**
-   - `storage` default export with all methods pre-bound to singleton client
-   - `getStorageClient()` function to get/create singleton instance
-
-8. **Comprehensive Test Suite:**
-   - Created `src/lib/__tests__/storage.test.ts`
-   - 38 tests covering all methods and error cases
-   - Mock-based testing for S3 operations
-   - Tests for:
-     - Constructor with/without credentials
-     - Environment variable validation
-     - All CRUD operations (upload, get URL, delete, list)
-     - Error handling for all failure scenarios
-     - Pagination and continuation tokens
-     - Metadata retrieval
-     - Singleton pattern
-
-### Files created/modified:
-- `scamscrammer/src/lib/storage.ts` - Storage service module (new)
-- `scamscrammer/src/lib/__tests__/storage.test.ts` - Storage tests (new)
-- `scamscrammer/package.json` - Added AWS SDK dependencies
+### Next Steps
+- Implement `/api/twilio/status` for call status updates
+- Implement `/api/twilio/recording` for recording completion
+- Implement `/api/voice/stream` for real-time voice streaming

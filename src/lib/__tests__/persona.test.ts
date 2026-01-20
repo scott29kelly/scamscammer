@@ -1,134 +1,202 @@
+/**
+ * Tests for Earl AI Persona Configuration
+ */
+
 import {
-  EARL_PERSONA,
   EARL_SYSTEM_PROMPT,
+  EARL_PERSONA,
+  EARL_TANGENT_TOPICS,
+  EARL_SIGNATURE_PHRASES,
+  EARL_MISHEARINGS,
+  EARL_RESPONSE_TIMING,
   getRandomTangent,
   getMishearing,
   getRandomPhrase,
   getRandomPauseDuration,
   shouldTangent,
-  shouldMishear,
-  applyMishearings,
-  getAllMishearings,
-  getAllTangentTopics,
-  getAllSignaturePhrases,
-  createCustomPersona,
-  type PersonaConfig,
-  type TangentTopic,
-  type MishearingMapping,
-  type ResponseConfig,
+  getEarlGreeting,
+  findTriggeredTangents,
 } from "../persona";
 
-describe("Earl AI Persona Configuration", () => {
-  describe("EARL_PERSONA", () => {
-    it("should have correct basic information", () => {
-      expect(EARL_PERSONA.name).toBe("Earl");
-      expect(EARL_PERSONA.fullName).toBe("Earl Pemberton");
-      expect(EARL_PERSONA.age).toBe(81);
-      expect(EARL_PERSONA.location).toBe("Tulsa, Oklahoma");
+describe("Earl Persona Configuration", () => {
+  describe("EARL_SYSTEM_PROMPT", () => {
+    it("should include Earl's name", () => {
+      expect(EARL_SYSTEM_PROMPT).toContain("Earl Pemberton");
     });
 
-    it("should have a system prompt", () => {
-      expect(EARL_PERSONA.systemPrompt).toBeDefined();
-      expect(EARL_PERSONA.systemPrompt.length).toBeGreaterThan(100);
+    it("should include Earl's age", () => {
+      expect(EARL_SYSTEM_PROMPT).toContain("81-year-old");
+    });
+
+    it("should include Earl's occupation", () => {
+      expect(EARL_SYSTEM_PROMPT).toContain("refrigerator repairman");
+    });
+
+    it("should include core behaviors", () => {
+      expect(EARL_SYSTEM_PROMPT).toContain("CORE BEHAVIORS");
+      expect(EARL_SYSTEM_PROMPT).toContain("Mishear things");
+      expect(EARL_SYSTEM_PROMPT).toContain("tangents");
+    });
+
+    it("should include safety instructions (NEVER section)", () => {
+      expect(EARL_SYSTEM_PROMPT).toContain("NEVER");
+      expect(EARL_SYSTEM_PROMPT).toContain("personal information");
+      expect(EARL_SYSTEM_PROMPT).toContain("Hang up first");
+    });
+  });
+
+  describe("EARL_PERSONA", () => {
+    it("should have correct name", () => {
+      expect(EARL_PERSONA.name).toBe("Earl Pemberton");
+    });
+
+    it("should have correct age", () => {
+      expect(EARL_PERSONA.age).toBe(81);
     });
 
     it("should have tangent topics", () => {
-      expect(EARL_PERSONA.tangentTopics).toBeDefined();
       expect(EARL_PERSONA.tangentTopics.length).toBeGreaterThan(0);
     });
 
     it("should have signature phrases", () => {
-      expect(EARL_PERSONA.signaturePhrases).toBeDefined();
       expect(EARL_PERSONA.signaturePhrases.length).toBeGreaterThan(0);
     });
 
     it("should have mishearings", () => {
-      expect(EARL_PERSONA.mishearings).toBeDefined();
-      expect(EARL_PERSONA.mishearings.length).toBeGreaterThan(0);
+      expect(Object.keys(EARL_PERSONA.mishearings).length).toBeGreaterThan(0);
     });
 
-    it("should have response config with valid values", () => {
-      const config = EARL_PERSONA.responseConfig;
-      expect(config.minPauseMs).toBeGreaterThan(0);
-      expect(config.maxPauseMs).toBeGreaterThan(config.minPauseMs);
-      expect(config.tangentProbability).toBeGreaterThan(0);
-      expect(config.tangentProbability).toBeLessThanOrEqual(1);
-      expect(config.mishearingProbability).toBeGreaterThan(0);
-      expect(config.mishearingProbability).toBeLessThanOrEqual(1);
+    it("should have response timing config", () => {
+      expect(EARL_PERSONA.responseTiming.minPauseMs).toBeGreaterThan(0);
+      expect(EARL_PERSONA.responseTiming.maxPauseMs).toBeGreaterThan(
+        EARL_PERSONA.responseTiming.minPauseMs
+      );
     });
   });
 
-  describe("EARL_SYSTEM_PROMPT", () => {
-    it("should mention Earl's name", () => {
-      expect(EARL_SYSTEM_PROMPT).toContain("Earl Pemberton");
+  describe("EARL_TANGENT_TOPICS", () => {
+    it("should have General Patton topic", () => {
+      const generalPatton = EARL_TANGENT_TOPICS.find((t) =>
+        t.name.includes("General Patton")
+      );
+      expect(generalPatton).toBeDefined();
+      expect(generalPatton?.description).toContain("parakeet");
     });
 
-    it("should mention key character traits", () => {
-      expect(EARL_SYSTEM_PROMPT).toContain("refrigerator repairman");
-      expect(EARL_SYSTEM_PROMPT).toContain("Tulsa");
-      expect(EARL_SYSTEM_PROMPT).toContain("81-year-old");
+    it("should have Elvis topic", () => {
+      const elvis = EARL_TANGENT_TOPICS.find((t) =>
+        t.name.includes("Elvis")
+      );
+      expect(elvis).toBeDefined();
+      expect(elvis?.description).toContain("refrigerator");
     });
 
-    it("should contain behavioral instructions", () => {
-      expect(EARL_SYSTEM_PROMPT).toContain("CORE BEHAVIORS");
-      expect(EARL_SYSTEM_PROMPT).toContain("NEVER");
-    });
-
-    it("should mention key tangent topics", () => {
-      expect(EARL_SYSTEM_PROMPT).toContain("General Patton");
-      expect(EARL_SYSTEM_PROMPT).toContain("Elvis");
-      expect(EARL_SYSTEM_PROMPT).toContain("Phyllis");
+    it("should have trigger words", () => {
+      const topicsWithTriggers = EARL_TANGENT_TOPICS.filter(
+        (t) => t.triggers && t.triggers.length > 0
+      );
+      expect(topicsWithTriggers.length).toBeGreaterThan(0);
     });
   });
 
+  describe("EARL_MISHEARINGS", () => {
+    it("should have credit card mishearing", () => {
+      expect(EARL_MISHEARINGS["credit card"]).toBe("bread cart");
+    });
+
+    it("should have microsoft mishearing", () => {
+      expect(EARL_MISHEARINGS["microsoft"]).toBe("micro soft-serve");
+    });
+
+    it("should have virus mishearing", () => {
+      expect(EARL_MISHEARINGS["virus"]).toBe("iris");
+    });
+
+    it("should have financial terms", () => {
+      expect(EARL_MISHEARINGS["bank"]).toBeDefined();
+      expect(EARL_MISHEARINGS["money"]).toBeDefined();
+    });
+
+    it("should have scam-related terms", () => {
+      expect(EARL_MISHEARINGS["irs"]).toBeDefined();
+      expect(EARL_MISHEARINGS["warrant"]).toBeDefined();
+    });
+  });
+
+  describe("EARL_SIGNATURE_PHRASES", () => {
+    it("should have common phrases", () => {
+      expect(EARL_SIGNATURE_PHRASES).toContain("Well I'll be dipped!");
+      expect(EARL_SIGNATURE_PHRASES.some((p) => p.includes("Phyllis"))).toBe(
+        true
+      );
+    });
+
+    it("should have multiple phrases", () => {
+      expect(EARL_SIGNATURE_PHRASES.length).toBeGreaterThan(5);
+    });
+  });
+
+  describe("EARL_RESPONSE_TIMING", () => {
+    it("should have valid timing values", () => {
+      expect(EARL_RESPONSE_TIMING.minPauseMs).toBe(500);
+      expect(EARL_RESPONSE_TIMING.maxPauseMs).toBe(2000);
+      expect(EARL_RESPONSE_TIMING.longPauseProbability).toBe(0.15);
+      expect(EARL_RESPONSE_TIMING.longPauseMs).toBe(5000);
+    });
+  });
+});
+
+describe("Helper Functions", () => {
   describe("getRandomTangent", () => {
     it("should return a tangent topic", () => {
       const tangent = getRandomTangent();
+
       expect(tangent).toBeDefined();
-      expect(tangent.subject).toBeDefined();
-      expect(tangent.details).toBeDefined();
+      expect(tangent.name).toBeDefined();
+      expect(tangent.description).toBeDefined();
     });
 
-    it("should return different topics over multiple calls (probabilistic)", () => {
-      const topics = new Set<string>();
+    it("should return different tangents over multiple calls", () => {
+      const tangents = new Set<string>();
       for (let i = 0; i < 50; i++) {
-        topics.add(getRandomTangent().subject);
+        tangents.add(getRandomTangent().name);
       }
-      expect(topics.size).toBeGreaterThan(1);
+      // Should have gotten at least a few different tangents
+      expect(tangents.size).toBeGreaterThan(1);
     });
   });
 
   describe("getMishearing", () => {
     it("should return misheard version for known words", () => {
       expect(getMishearing("credit card")).toBe("bread cart");
-      expect(getMishearing("Microsoft")).toBe("micro soft-serve");
-      expect(getMishearing("virus")).toBe("iris");
+      expect(getMishearing("microsoft")).toBe("micro soft-serve");
     });
 
     it("should be case insensitive", () => {
       expect(getMishearing("CREDIT CARD")).toBe("bread cart");
-      expect(getMishearing("Credit Card")).toBe("bread cart");
+      expect(getMishearing("Microsoft")).toBe("micro soft-serve");
     });
 
-    it("should return null for unknown words", () => {
-      expect(getMishearing("hello")).toBeNull();
-      expect(getMishearing("refrigerator")).toBeNull();
+    it("should return original word if no mishearing", () => {
+      expect(getMishearing("hello")).toBe("hello");
+      expect(getMishearing("random word")).toBe("random word");
     });
 
-    it("should handle whitespace", () => {
-      expect(getMishearing("  credit card  ")).toBe("bread cart");
+    it("should handle partial matches", () => {
+      expect(getMishearing("my credit card number")).toContain("bread cart");
     });
   });
 
   describe("getRandomPhrase", () => {
     it("should return a signature phrase", () => {
       const phrase = getRandomPhrase();
+
       expect(phrase).toBeDefined();
       expect(typeof phrase).toBe("string");
-      expect(phrase.length).toBeGreaterThan(0);
+      expect(EARL_SIGNATURE_PHRASES).toContain(phrase);
     });
 
-    it("should return different phrases over multiple calls (probabilistic)", () => {
+    it("should return different phrases over multiple calls", () => {
       const phrases = new Set<string>();
       for (let i = 0; i < 50; i++) {
         phrases.add(getRandomPhrase());
@@ -138,190 +206,135 @@ describe("Earl AI Persona Configuration", () => {
   });
 
   describe("getRandomPauseDuration", () => {
-    it("should return a value within the default range", () => {
-      const config = EARL_PERSONA.responseConfig;
-      for (let i = 0; i < 20; i++) {
+    it("should return a number in valid range", () => {
+      for (let i = 0; i < 100; i++) {
         const duration = getRandomPauseDuration();
-        expect(duration).toBeGreaterThanOrEqual(config.minPauseMs);
-        expect(duration).toBeLessThan(config.maxPauseMs);
+        expect(duration).toBeGreaterThanOrEqual(EARL_RESPONSE_TIMING.minPauseMs);
+        // Could be long pause, so check against that too
+        expect(duration).toBeLessThanOrEqual(EARL_RESPONSE_TIMING.longPauseMs);
       }
     });
 
-    it("should respect custom config", () => {
-      const customConfig: ResponseConfig = {
-        minPauseMs: 100,
-        maxPauseMs: 200,
-        hearingAidDelayMs: 1000,
-        tangentProbability: 0.5,
-        mishearingProbability: 0.5,
-      };
-      for (let i = 0; i < 20; i++) {
-        const duration = getRandomPauseDuration(customConfig);
-        expect(duration).toBeGreaterThanOrEqual(100);
-        expect(duration).toBeLessThan(200);
+    it("should sometimes return long pause duration", () => {
+      let longPauseCount = 0;
+      const iterations = 1000;
+
+      for (let i = 0; i < iterations; i++) {
+        const duration = getRandomPauseDuration();
+        if (duration === EARL_RESPONSE_TIMING.longPauseMs) {
+          longPauseCount++;
+        }
       }
+
+      // Should get some long pauses (roughly 15% +/- margin)
+      expect(longPauseCount).toBeGreaterThan(50); // At least 5%
+      expect(longPauseCount).toBeLessThan(300); // Less than 30%
     });
   });
 
   describe("shouldTangent", () => {
-    it("should return a boolean", () => {
+    it("should return boolean", () => {
       const result = shouldTangent();
       expect(typeof result).toBe("boolean");
     });
 
-    it("should respect custom probability", () => {
-      const alwaysTangent: ResponseConfig = {
-        minPauseMs: 100,
-        maxPauseMs: 200,
-        hearingAidDelayMs: 1000,
-        tangentProbability: 1.0,
-        mishearingProbability: 0.5,
-      };
-      expect(shouldTangent(alwaysTangent)).toBe(true);
+    it("should respect probability", () => {
+      let tangentCount = 0;
+      const iterations = 1000;
 
-      const neverTangent: ResponseConfig = {
-        minPauseMs: 100,
-        maxPauseMs: 200,
-        hearingAidDelayMs: 1000,
-        tangentProbability: 0,
-        mishearingProbability: 0.5,
-      };
-      expect(shouldTangent(neverTangent)).toBe(false);
-    });
-  });
-
-  describe("shouldMishear", () => {
-    it("should return a boolean", () => {
-      const result = shouldMishear();
-      expect(typeof result).toBe("boolean");
-    });
-
-    it("should respect custom probability", () => {
-      const alwaysMishear: ResponseConfig = {
-        minPauseMs: 100,
-        maxPauseMs: 200,
-        hearingAidDelayMs: 1000,
-        tangentProbability: 0.5,
-        mishearingProbability: 1.0,
-      };
-      expect(shouldMishear(alwaysMishear)).toBe(true);
-
-      const neverMishear: ResponseConfig = {
-        minPauseMs: 100,
-        maxPauseMs: 200,
-        hearingAidDelayMs: 1000,
-        tangentProbability: 0.5,
-        mishearingProbability: 0,
-      };
-      expect(shouldMishear(neverMishear)).toBe(false);
-    });
-  });
-
-  describe("applyMishearings", () => {
-    it("should return original text when mishearing probability is 0", () => {
-      const config: ResponseConfig = {
-        minPauseMs: 100,
-        maxPauseMs: 200,
-        hearingAidDelayMs: 1000,
-        tangentProbability: 0.5,
-        mishearingProbability: 0,
-      };
-      const text = "I need your credit card number";
-      expect(applyMishearings(text, config)).toBe(text);
-    });
-
-    it("should sometimes apply mishearings with high probability", () => {
-      const config: ResponseConfig = {
-        minPauseMs: 100,
-        maxPauseMs: 200,
-        hearingAidDelayMs: 1000,
-        tangentProbability: 0.5,
-        mishearingProbability: 1.0,
-      };
-      const text = "I need your credit card number";
-      let appliedCount = 0;
-      for (let i = 0; i < 20; i++) {
-        const result = applyMishearings(text, config);
-        if (result.includes("bread cart")) {
-          appliedCount++;
+      for (let i = 0; i < iterations; i++) {
+        if (shouldTangent(0.3)) {
+          tangentCount++;
         }
       }
-      expect(appliedCount).toBeGreaterThan(0);
+
+      // Should be roughly 30% (with some variance)
+      expect(tangentCount).toBeGreaterThan(200); // At least 20%
+      expect(tangentCount).toBeLessThan(400); // Less than 40%
+    });
+
+    it("should handle custom probability", () => {
+      // With 0 probability, should never tangent
+      let count = 0;
+      for (let i = 0; i < 100; i++) {
+        if (shouldTangent(0)) {
+          count++;
+        }
+      }
+      expect(count).toBe(0);
+
+      // With 1 probability, should always tangent
+      count = 0;
+      for (let i = 0; i < 100; i++) {
+        if (shouldTangent(1)) {
+          count++;
+        }
+      }
+      expect(count).toBe(100);
     });
   });
 
-  describe("getAllMishearings", () => {
-    it("should return an array of mishearing mappings", () => {
-      const mishearings = getAllMishearings();
-      expect(Array.isArray(mishearings)).toBe(true);
-      expect(mishearings.length).toBeGreaterThan(0);
+  describe("getEarlGreeting", () => {
+    it("should return a greeting string", () => {
+      const greeting = getEarlGreeting();
+
+      expect(greeting).toBeDefined();
+      expect(typeof greeting).toBe("string");
+      expect(greeting.length).toBeGreaterThan(10);
     });
 
-    it("should return a copy (not modify original)", () => {
-      const mishearings = getAllMishearings();
-      mishearings.push({ original: "test", misheard: "test" });
-      expect(getAllMishearings().length).toBeLessThan(mishearings.length);
-    });
-  });
-
-  describe("getAllTangentTopics", () => {
-    it("should return an array of tangent topics", () => {
-      const topics = getAllTangentTopics();
-      expect(Array.isArray(topics)).toBe(true);
-      expect(topics.length).toBeGreaterThan(0);
-      expect(topics[0].subject).toBeDefined();
-      expect(topics[0].details).toBeDefined();
+    it("should return different greetings over multiple calls", () => {
+      const greetings = new Set<string>();
+      for (let i = 0; i < 50; i++) {
+        greetings.add(getEarlGreeting());
+      }
+      expect(greetings.size).toBeGreaterThan(1);
     });
 
-    it("should return a copy (not modify original)", () => {
-      const topics = getAllTangentTopics();
-      topics.push({ subject: "test", details: "test" });
-      expect(getAllTangentTopics().length).toBeLessThan(topics.length);
-    });
-  });
-
-  describe("getAllSignaturePhrases", () => {
-    it("should return an array of signature phrases", () => {
-      const phrases = getAllSignaturePhrases();
-      expect(Array.isArray(phrases)).toBe(true);
-      expect(phrases.length).toBeGreaterThan(0);
-    });
-
-    it("should return a copy (not modify original)", () => {
-      const phrases = getAllSignaturePhrases();
-      phrases.push("test phrase");
-      expect(getAllSignaturePhrases().length).toBeLessThan(phrases.length);
+    it("should include hearing-related content", () => {
+      // Run multiple times to check various greetings
+      let hasHearingReference = false;
+      for (let i = 0; i < 20; i++) {
+        const greeting = getEarlGreeting();
+        if (
+          greeting.toLowerCase().includes("hear") ||
+          greeting.toLowerCase().includes("speak up")
+        ) {
+          hasHearingReference = true;
+          break;
+        }
+      }
+      expect(hasHearingReference).toBe(true);
     });
   });
 
-  describe("createCustomPersona", () => {
-    it("should create a persona with overridden values", () => {
-      const customPersona = createCustomPersona({
-        name: "Gladys",
-        age: 78,
-      });
-      expect(customPersona.name).toBe("Gladys");
-      expect(customPersona.age).toBe(78);
-      expect(customPersona.fullName).toBe("Earl Pemberton");
-    });
+  describe("findTriggeredTangents", () => {
+    it("should find tangents for matching trigger words", () => {
+      const tangents = findTriggeredTangents("I have a pet bird at home");
 
-    it("should preserve original values when not overridden", () => {
-      const customPersona = createCustomPersona({ name: "Test" });
-      expect(customPersona.tangentTopics).toEqual(EARL_PERSONA.tangentTopics);
-      expect(customPersona.signaturePhrases).toEqual(EARL_PERSONA.signaturePhrases);
-    });
-
-    it("should allow partial response config overrides", () => {
-      const customPersona = createCustomPersona({
-        responseConfig: {
-          ...EARL_PERSONA.responseConfig,
-          tangentProbability: 0.9,
-        },
-      });
-      expect(customPersona.responseConfig.tangentProbability).toBe(0.9);
-      expect(customPersona.responseConfig.minPauseMs).toBe(
-        EARL_PERSONA.responseConfig.minPauseMs
+      expect(tangents.length).toBeGreaterThan(0);
+      expect(tangents.some((t) => t.name.includes("General Patton"))).toBe(
+        true
       );
+    });
+
+    it("should return empty array for no matches", () => {
+      const tangents = findTriggeredTangents("xyz abc 123");
+
+      expect(tangents).toEqual([]);
+    });
+
+    it("should be case insensitive", () => {
+      const tangents = findTriggeredTangents("BIRD PET ANIMAL");
+
+      expect(tangents.length).toBeGreaterThan(0);
+    });
+
+    it("should not return duplicate tangents", () => {
+      const tangents = findTriggeredTangents("bird bird bird pet animal");
+
+      const uniqueNames = new Set(tangents.map((t) => t.name));
+      expect(uniqueNames.size).toBe(tangents.length);
     });
   });
 });
