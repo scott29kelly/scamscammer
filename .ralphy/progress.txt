@@ -1,69 +1,133 @@
 # Ralphy Progress Log
 
-## Task: Create Stats API Endpoint
+## Task: Add Error Handling and Monitoring
 
 **Status:** Completed
 **Date:** 2026-01-19
 
 ### What was done:
 
-1. **Set up Prisma ORM with PostgreSQL**
-   - Created `prisma/schema.prisma` with Call and CallSegment models
-   - Created `prisma.config.ts` for Prisma 7 configuration
-   - Installed `@prisma/client`, `@prisma/adapter-pg`, `pg`, and `dotenv`
-   - Generated Prisma client
+1. **Created src/lib/errors.ts - Custom Error Classes**
+   - `AppError` - Base application error class with code, statusCode, isOperational flag
+   - `TwilioError` - Twilio-related errors with factory methods:
+     - `signatureValidationFailed()` - 401 for invalid signatures
+     - `callNotFound(callSid)` - 404 for missing calls
+     - `webhookError(operation)` - 500 for webhook failures
+     - `connectionFailed()` - 503 for connection issues
+   - `OpenAIError` - OpenAI Realtime API errors with factory methods:
+     - `connectionFailed()` - 503 for WebSocket connection failures
+     - `sessionError()` - 500 for session issues
+     - `audioStreamError()` - 500 for audio stream issues
+     - `rateLimitExceeded()` - 429 for rate limits
+     - `invalidResponse()` - 502 for malformed responses
+   - `StorageError` - S3 storage errors with factory methods:
+     - `uploadFailed()` - 500 for upload failures
+     - `downloadFailed()` - 500 for download failures
+     - `deleteFailed()` - 500 for delete failures
+     - `fileNotFound()` - 404 for missing files
+     - `bucketNotConfigured()` - 500 for missing config
+   - `DatabaseError` - Database/Prisma errors with factory methods:
+     - `connectionFailed()` - 503 for connection failures
+     - `queryFailed()` - 500 for query failures
+     - `recordNotFound()` - 404 for missing records
+     - `duplicateRecord()` - 409 for duplicates
+   - `ValidationError` - Input validation errors with factory methods:
+     - `requiredField()` - 400 for missing required fields
+     - `invalidFormat()` - 400 for format issues
+     - `invalidValue()` - 400 for invalid values
+   - Error formatting helpers:
+     - `formatErrorResponse(error)` - Safe API response formatting
+     - `getErrorStatusCode(error)` - Extract HTTP status code
+     - `isOperationalError(error)` - Check if error is expected
+     - `getErrorMessage(error)` - Safe message extraction
+     - `getErrorContext(error)` - Context for logging
 
-2. **Created database client singleton**
-   - Created `src/lib/db.ts` with Prisma client singleton pattern
-   - Configured for development hot-reload compatibility
-   - Uses `@prisma/adapter-pg` for Prisma 7 compatibility
+2. **Created src/lib/logger.ts - Structured Logging Utility**
+   - `Logger` class with configurable options:
+     - Log levels: debug, info, warn, error
+     - Pretty print mode for development
+     - JSON format for production (log aggregator friendly)
+     - Configurable minimum log level via LOG_LEVEL env var
+   - Features:
+     - Child loggers for adding context
+     - Request-scoped loggers with requestId
+     - Service-specific loggers
+     - Error logging with stack traces
+   - Pre-configured service loggers exported:
+     - `logger` - Default logger
+     - `twilioLogger` - Twilio service logs
+     - `openaiLogger` - OpenAI service logs
+     - `storageLogger` - S3 storage logs
+     - `databaseLogger` - Database/Prisma logs
+     - `apiLogger` - API route logs
 
-3. **Added TypeScript type definitions**
-   - Updated `src/types/index.ts` with:
-     - Re-exported Prisma types (Call, CallSegment, CallStatus, Speaker)
-     - ApiErrorResponse interface
-     - PaginationInfo interface
-     - CallListItem interface
-     - CallListResponse interface
-     - CallResponse interface
-     - DashboardStats interface
+3. **Created src/app/api/health/route.ts - Health Check Endpoint**
+   - GET /api/health endpoint
+   - Checks all services:
+     - Database: Actual connection test with latency measurement
+     - Twilio: Configuration validation
+     - OpenAI: API key configuration check
+     - Storage: S3 bucket and credentials check
+   - Returns overall status:
+     - `healthy` (200) - All services operational
+     - `degraded` (200) - Some non-critical services unavailable
+     - `unhealthy` (503) - Critical services (database) unavailable
+   - Response includes:
+     - `status` - Overall health status
+     - `timestamp` - ISO timestamp
+     - `version` - Application version
+     - `services` - Individual service statuses with latency
+     - `uptime` - Server uptime in seconds
 
-4. **Implemented Stats API endpoint**
-   - Created `src/app/api/stats/route.ts` with GET handler
-   - Returns comprehensive dashboard statistics:
-     - `totalCalls` - total number of calls
-     - `totalDuration` - sum of all call durations (seconds)
-     - `averageDuration` - average call duration (rounded)
-     - `callsByStatus` - count per status (RINGING, IN_PROGRESS, COMPLETED, FAILED, NO_ANSWER)
-     - `callsByDay` - last 30 days with call counts (for charting)
-     - `topRatedCalls` - top 5 highest-rated calls
-     - `longestCalls` - top 5 longest duration calls
-   - Uses Prisma aggregations for efficiency (count, aggregate, groupBy, $queryRaw)
-   - All database queries run in parallel using Promise.all()
-   - Proper error handling with 500 response on failure
+4. **Updated src/app/api/stats/route.ts with Error Handling**
+   - Added request logging with apiLogger
+   - Added proper error handling with DatabaseError
+   - Uses formatErrorResponse for consistent error responses
+   - Logs both successful operations and errors with context
 
-5. **Set up Jest testing framework**
-   - Created `jest.config.mjs` with TypeScript support
-   - Created `jest.setup.js` for test configuration
-   - Added test and test:watch scripts to package.json
-   - Installed jest, ts-jest, @types/jest, and @testing-library/jest-dom
+5. **Added TypeScript types to src/types/index.ts**
+   - `ServiceStatus` interface for health check service status
+   - `HealthResponse` interface for health check API response
 
-6. **Created comprehensive tests**
-   - Created `src/app/api/stats/__tests__/route.test.ts`
-   - Tests cover:
-     - Successful response with mock data
-     - Empty database handling (all zeros/empty arrays)
-     - Database error handling (500 response)
-     - Missing days filled with zero counts
-   - All 4 tests pass
+6. **Created comprehensive test suites**
+   - `src/lib/__tests__/errors.test.ts` - 43 tests for error classes
+     - Tests all error class constructors
+     - Tests all factory methods
+     - Tests helper functions
+   - `src/lib/__tests__/logger.test.ts` - 17 tests for logger
+     - Tests log level filtering
+     - Tests context merging
+     - Tests child loggers
+     - Tests pretty print vs JSON output
+   - `src/app/api/health/__tests__/route.test.ts` - 10 tests for health endpoint
+     - Tests healthy status with all services configured
+     - Tests unhealthy when database fails
+     - Tests degraded status for various misconfigurations
+   - Updated `src/app/api/stats/__tests__/route.test.ts` - 4 tests
+     - Updated error expectation to use new error format
+     - Added logger mocking
 
-### Files created/modified:
-- `scamscrammer/prisma/schema.prisma` - Database schema with Call, CallSegment models and enums
-- `scamscrammer/prisma.config.ts` - Prisma 7 configuration
-- `scamscrammer/src/lib/db.ts` - Prisma client singleton
-- `scamscrammer/src/types/index.ts` - TypeScript type definitions
-- `scamscrammer/src/app/api/stats/route.ts` - Stats API endpoint
-- `scamscrammer/src/app/api/stats/__tests__/route.test.ts` - API tests
-- `scamscrammer/jest.config.mjs` - Jest configuration
-- `scamscrammer/jest.setup.js` - Jest setup
-- `scamscrammer/package.json` - Added test scripts and dependencies
+7. **Created tsconfig.json for the project**
+   - TypeScript strict mode enabled
+   - Path alias `@/*` configured for src directory
+
+### Files created:
+- `scamscrammer/src/lib/errors.ts` - Custom error classes
+- `scamscrammer/src/lib/logger.ts` - Logging utility
+- `scamscrammer/src/app/api/health/route.ts` - Health check endpoint
+- `scamscrammer/src/lib/__tests__/errors.test.ts` - Error tests
+- `scamscrammer/src/lib/__tests__/logger.test.ts` - Logger tests
+- `scamscrammer/src/app/api/health/__tests__/route.test.ts` - Health endpoint tests
+- `scamscrammer/tsconfig.json` - TypeScript configuration
+
+### Files modified:
+- `scamscrammer/src/app/api/stats/route.ts` - Added error handling and logging
+- `scamscrammer/src/app/api/stats/__tests__/route.test.ts` - Updated for new error format
+- `scamscrammer/src/types/index.ts` - Added health check types
+
+### Test Results:
+All 74 tests pass:
+- `src/lib/__tests__/errors.test.ts` - 43 tests
+- `src/lib/__tests__/logger.test.ts` - 17 tests
+- `src/app/api/health/__tests__/route.test.ts` - 10 tests
+- `src/app/api/stats/__tests__/route.test.ts` - 4 tests

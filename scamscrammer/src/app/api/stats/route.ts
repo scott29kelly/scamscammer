@@ -8,8 +8,13 @@ import { NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import type { DashboardStats, ApiErrorResponse, CallListItem } from '@/types';
 import { CallStatus } from '@prisma/client';
+import { apiLogger } from '@/lib/logger';
+import { DatabaseError, formatErrorResponse, getErrorStatusCode } from '@/lib/errors';
 
 export async function GET(): Promise<NextResponse<DashboardStats | ApiErrorResponse>> {
+  const requestLogger = apiLogger.forRequest(`stats-${Date.now()}`);
+  requestLogger.debug('Fetching dashboard statistics');
+
   try {
     // Get the date 30 days ago for the callsByDay chart
     const thirtyDaysAgo = new Date();
@@ -160,12 +165,21 @@ export async function GET(): Promise<NextResponse<DashboardStats | ApiErrorRespo
       longestCalls: longestCalls.map(mapToCallListItem),
     };
 
+    requestLogger.info('Dashboard statistics fetched successfully', {
+      totalCalls,
+      totalDuration: stats.totalDuration,
+    });
+
     return NextResponse.json(stats);
   } catch (error) {
-    console.error('Error fetching stats:', error);
+    const dbError = DatabaseError.queryFailed('stats aggregation');
+    requestLogger.logError(error, 'Failed to fetch dashboard statistics', {
+      originalError: error instanceof Error ? error.message : String(error),
+    });
+
     return NextResponse.json(
-      { error: 'Failed to fetch statistics' },
-      { status: 500 }
+      formatErrorResponse(dbError),
+      { status: getErrorStatusCode(dbError) }
     );
   }
 }
