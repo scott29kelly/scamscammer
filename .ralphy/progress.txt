@@ -85,3 +85,156 @@ The main client class provides:
 - Error handling
 - Factory functions
 
+3. **Added TypeScript type definitions**
+   - Updated `src/types/index.ts` with:
+     - Re-exported Prisma types (Call, CallSegment, CallStatus, Speaker)
+     - ApiErrorResponse interface
+     - PaginationInfo interface
+     - CallListItem interface
+     - CallListResponse interface
+     - CallResponse interface
+     - DashboardStats interface
+
+4. **Implemented Stats API endpoint**
+   - Created `src/app/api/stats/route.ts` with GET handler
+   - Returns comprehensive dashboard statistics:
+     - `totalCalls` - total number of calls
+     - `totalDuration` - sum of all call durations (seconds)
+     - `averageDuration` - average call duration (rounded)
+     - `callsByStatus` - count per status (RINGING, IN_PROGRESS, COMPLETED, FAILED, NO_ANSWER)
+     - `callsByDay` - last 30 days with call counts (for charting)
+     - `topRatedCalls` - top 5 highest-rated calls
+     - `longestCalls` - top 5 longest duration calls
+   - Uses Prisma aggregations for efficiency (count, aggregate, groupBy, $queryRaw)
+   - All database queries run in parallel using Promise.all()
+   - Proper error handling with 500 response on failure
+
+5. **Set up Jest testing framework**
+   - Created `jest.config.mjs` with TypeScript support
+   - Created `jest.setup.js` for test configuration
+   - Added test and test:watch scripts to package.json
+   - Installed jest, ts-jest, @types/jest, and @testing-library/jest-dom
+
+6. **Created comprehensive tests**
+   - Created `src/app/api/stats/__tests__/route.test.ts`
+   - Tests cover:
+     - Successful response with mock data
+     - Empty database handling (all zeros/empty arrays)
+     - Database error handling (500 response)
+     - Missing days filled with zero counts
+   - All 4 tests pass
+
+### Files created/modified:
+- `scamscrammer/prisma/schema.prisma` - Database schema with Call, CallSegment models and enums
+- `scamscrammer/prisma.config.ts` - Prisma 7 configuration
+- `scamscrammer/src/lib/db.ts` - Prisma client singleton
+- `scamscrammer/src/types/index.ts` - TypeScript type definitions
+- `scamscrammer/src/app/api/stats/route.ts` - Stats API endpoint
+- `scamscrammer/src/app/api/stats/__tests__/route.test.ts` - API tests
+- `scamscrammer/jest.config.mjs` - Jest configuration
+- `scamscrammer/jest.setup.js` - Jest setup
+- `scamscrammer/package.json` - Added test scripts and dependencies
+
+---
+
+## Task: Implement OpenAI Realtime Voice Client
+
+**Status:** Completed
+**Date:** 2026-01-19
+
+### What was done:
+
+1. **Installed Dependencies**
+   - Added `openai` package for OpenAI SDK
+   - Added `ws` package for WebSocket support
+   - Added `@types/ws` for TypeScript type definitions
+
+2. **Created OpenAI Realtime Client Module**
+   - Created `src/lib/openai.ts` with full WebSocket-based client
+   - Implements connection to OpenAI Realtime API (`wss://api.openai.com/v1/realtime`)
+   - Uses proper authentication headers (`Authorization: Bearer`, `OpenAI-Beta: realtime=v1`)
+
+3. **OpenAIRealtimeClient Class Features:**
+   - **Connection Management:**
+     - `connect(sessionConfig)` - Establish realtime WebSocket session
+     - `disconnect(reason)` - Clean shutdown with proper close codes
+     - `isConnected()` - Check connection state
+     - `getState()` - Get current ConnectionState enum value
+     - `getSessionId()` - Get the current session ID
+
+   - **Audio Streaming:**
+     - `sendAudio(audioChunk: Buffer)` - Stream audio data to OpenAI (base64 encoded)
+     - `commitAudioBuffer()` - Signal end of speech input
+     - `clearAudioBuffer()` - Clear pending audio buffer
+     - `cancelResponse()` - Cancel current AI response
+     - `triggerResponse()` - Manually trigger AI response (for non-VAD mode)
+
+   - **Session Configuration:**
+     - `setSystemPrompt(prompt)` - Update system instructions mid-session
+     - `updateSession(config)` - Update voice, temperature, turn detection, etc.
+
+   - **Event Handlers:**
+     - `onResponse(callback)` - Handle audio response data
+     - `onTranscript(callback)` - Handle input/output transcripts
+     - `onError(callback)` - Handle errors
+     - `onDisconnect(callback)` - Handle disconnection
+
+   - **Events Emitted:**
+     - `stateChange` - Connection state changed
+     - `sessionCreated` - Session successfully created
+     - `audioResponse` - Audio chunk received from AI
+     - `transcript` - Text transcript (input or output, partial or final)
+     - `responseStart` - AI response started
+     - `responseEnd` - AI response completed (with token usage)
+     - `error` - Error occurred
+     - `disconnect` - Connection closed
+     - `speechStarted` - VAD detected speech start
+     - `speechStopped` - VAD detected speech end
+     - `inputAudioCommitted` - Audio buffer was committed
+     - `conversationItemCreated` - New conversation item
+
+4. **Configuration Support:**
+   - Uses `OpenAIRealtimeConfig` interface from types
+   - Default model: `gpt-4o-realtime-preview-2024-10-01`
+   - Default voice: `ash` (older male voice for Earl)
+   - Default audio format: `g711_ulaw` (Twilio compatible)
+   - Server VAD turn detection enabled by default
+   - Whisper transcription enabled by default
+
+5. **Error Handling:**
+   - Created `OpenAIRealtimeError` custom error class
+   - Includes error code, type, and optional event ID
+   - Proper WebSocket error handling
+   - Connection state tracking with ConnectionState enum
+
+6. **Reconnection Logic:**
+   - Automatic reconnection on unexpected disconnects
+   - Exponential backoff (1s, 2s, 4s)
+   - Max 3 reconnection attempts
+   - Clean close (code 1000) does not trigger reconnection
+
+7. **Earl Integration:**
+   - `createEarlClient(overrides)` factory function
+   - Pre-configured with EARL_SYSTEM_PROMPT
+   - Uses appropriate voice and timing settings
+   - Easy override of any default settings
+
+8. **Comprehensive Test Suite:**
+   - Created `src/lib/__tests__/openai.test.ts`
+   - 56 tests covering all functionality:
+     - Constructor and initial state
+     - Connection flow and state transitions
+     - API key validation
+     - Session configuration
+     - Audio streaming methods
+     - All event types
+     - Callback registration/unregistration
+     - Connection lifecycle
+     - Error handling
+     - createEarlClient factory function
+   - All tests pass using mocked WebSocket
+
+### Files created/modified:
+- `scamscrammer/src/lib/openai.ts` - OpenAI Realtime Voice Client (new)
+- `scamscrammer/src/lib/__tests__/openai.test.ts` - Client tests (new)
+- `scamscrammer/package.json` - Added openai, ws, @types/ws dependencies
