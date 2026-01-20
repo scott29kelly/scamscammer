@@ -1,63 +1,83 @@
-# ScamScrammer Development Progress
+# Recording Complete Webhook Handler - Implementation Progress
 
-## Completed Tasks
+## Task Completed: Create Recording Complete Webhook Handler
 
-### Create Incoming Call Webhook Handler (2026-01-19)
+### Summary
+Implemented a complete webhook handler for processing Twilio recording status callbacks. When a call recording is completed, the handler fetches the audio from Twilio, uploads it to S3, and updates the call record in the database.
 
-Implemented the complete incoming call webhook handler for Twilio integration.
+### Files Created
 
-#### Files Created/Modified:
+#### 1. src/lib/twilio.ts
+Twilio client helper module with the following functions:
+- `validateTwilioSignature()` - Validates webhook signatures for security
+- `generateTwiMLResponse()` - Generates TwiML for voice responses
+- `generateStreamTwiML()` - Generates TwiML for WebSocket media streams
+- `getCallDetails()` - Fetches call information from Twilio
+- `getRecordingDetails()` - Fetches recording metadata from Twilio
+- `fetchRecordingAudio()` - Downloads recording audio as a Buffer
+- `formatPhoneNumber()` - Normalizes phone numbers to E.164 format
+- `deleteRecording()` - Removes a recording from Twilio
 
-1. **src/lib/twilio.ts** - Twilio client and helper utilities
-   - `parseTwilioWebhookBody()` - Parse URL-encoded Twilio webhook body
-   - `isTwilioWebhookPayload()` - Validate webhook payload structure
-   - `validateTwilioSignature()` - Security validation for Twilio requests
-   - `formatPhoneNumber()` - Format phone numbers to E.164 format
-   - `formatPhoneNumberForDisplay()` - Human-readable phone number formatting
-   - `isValidPhoneNumber()` - Phone number validation
-   - `generateTwiMLResponse()` - Generate simple TwiML with voice message
-   - `generateStreamTwiML()` - Generate TwiML for WebSocket streaming
-   - `generateGreetingAndStreamTwiML()` - Combined greeting + stream TwiML
-   - `generateHangupTwiML()` - Generate hangup TwiML
-   - `generateFallbackTwiML()` - Error fallback TwiML (Earl-style message)
-   - `buildWebSocketUrl()` - Build WebSocket URL for voice streaming
-   - `getEarlGreeting()` - Random Earl greeting messages
+#### 2. src/lib/storage.ts
+S3 storage service for call recordings:
+- `generateStorageKey()` - Creates consistent S3 keys (recordings/YYYY/MM/callId.mp3)
+- `uploadRecording()` - Uploads audio buffer to S3
+- `getRecordingUrl()` - Generates signed URLs for playback
+- `deleteRecording()` - Removes recordings from S3
+- `listRecordings()` - Lists recordings with pagination
+- `recordingExists()` - Checks if a recording exists
 
-2. **src/app/api/twilio/incoming/route.ts** - Incoming call webhook handler
-   - POST handler for incoming Twilio calls
-   - Validates Twilio signature for security
-   - Creates call record in database with RINGING status
-   - Returns TwiML with Earl greeting + WebSocket connection
-   - Graceful error handling with fallback TwiML
-   - OPTIONS handler for CORS preflight
+#### 3. src/app/api/twilio/recording/route.ts
+POST webhook handler that:
+- Parses form-urlencoded Twilio webhook payloads
+- Validates Twilio signature in production
+- Finds the associated call record by Twilio SID
+- For completed recordings:
+  - Fetches audio from Twilio
+  - Uploads to S3 storage
+  - Updates call record with recording URL and duration
+- For failed recordings:
+  - Logs the failure
+  - Updates call notes with failure message
+- Always returns success to Twilio (to prevent retries)
+- Handles errors gracefully with logging
 
-3. **src/lib/__tests__/twilio.test.ts** - 38 tests for Twilio helpers
-   - Phone number formatting tests
-   - Validation tests
-   - TwiML generation tests
-   - WebSocket URL building tests
-   - Earl greeting tests
+#### 4. src/app/api/twilio/recording/__tests__/route.test.ts
+Comprehensive test suite with 13 test cases covering:
+- Successful recording processing
+- Duration parsing from payload
+- Signature validation in production
+- Call not found handling
+- Twilio recording fetch failures
+- S3 upload failures
+- Failed recording status handling
+- URL generation fallback
+- Unexpected error handling
+- Minimal payload parsing
+- Non-numeric duration handling
 
-4. **src/app/api/twilio/incoming/__tests__/route.test.ts** - 15 tests for webhook handler
-   - Successful call processing
-   - Signature validation
-   - Error handling
-   - Database interaction
-   - CORS support
+### Additional Files
+- `tsconfig.json` - Added TypeScript configuration for the project
 
-5. **tsconfig.json** - TypeScript configuration with path aliases
+### Dependencies Installed
+- `twilio` - Twilio SDK for API interactions and TwiML generation
+- `@aws-sdk/client-s3` - AWS SDK for S3 operations
+- `@aws-sdk/s3-request-presigner` - For generating signed URLs
 
-#### Dependencies Added:
-- `twilio` - Twilio SDK for TwiML generation and signature validation
+### Test Results
+All 64 tests passing (47 persona tests + 4 stats tests + 13 recording webhook tests)
 
-#### Test Results:
-- All 53 tests passing
-- 38 tests for Twilio helpers
-- 15 tests for incoming call webhook
+### Environment Variables Required
+The following environment variables need to be configured:
+- `TWILIO_ACCOUNT_SID` - Twilio account identifier
+- `TWILIO_AUTH_TOKEN` - Twilio authentication token
+- `AWS_REGION` - AWS region (defaults to us-east-1)
+- `AWS_ACCESS_KEY_ID` - AWS access key
+- `AWS_SECRET_ACCESS_KEY` - AWS secret key
+- `S3_BUCKET_NAME` - S3 bucket for storing recordings
 
-#### Architecture Notes:
-- Webhook validates Twilio signature to prevent unauthorized requests
-- Call records are created with RINGING status upon receiving incoming call
-- TwiML response includes Earl's greeting followed by WebSocket connection
-- Fallback TwiML ensures calls don't drop on errors (stays in character as Earl)
-- WebSocket URL is built from NEXT_PUBLIC_APP_URL or extracted from request
+### Webhook Configuration
+Configure this webhook URL in Twilio console:
+`POST https://your-domain.com/api/twilio/recording`
+
+Set this as the "Recording Status Callback" URL for your Twilio voice configuration.

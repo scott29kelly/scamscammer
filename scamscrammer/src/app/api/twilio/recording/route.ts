@@ -1,244 +1,168 @@
 /**
- * Twilio Recording Complete Webhook Handler
+ * Recording Complete Webhook Handler
  *
- * This endpoint handles Twilio's recording status callbacks.
- * When a recording is completed:
- * 1. Validates the Twilio signature for security
- * 2. Fetches the recording from Twilio
- * 3. Uploads it to S3 storage
+ * POST /api/twilio/recording - Handles Twilio recording status callbacks
+ *
+ * When a call recording is completed:
+ * 1. Validates the Twilio webhook signature
+ * 2. Fetches the recording audio from Twilio
+ * 3. Uploads the recording to S3 storage
  * 4. Updates the call record with the recording URL
- *
- * @see https://www.twilio.com/docs/voice/api/recording#recordingstatuscallback
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import {
-  validateTwilioSignature,
-  parseTwilioWebhookBody,
-  getTwilioClient,
-} from '@/lib/twilio';
-import { getStorageClient } from '@/lib/storage';
-import { prisma } from '@/lib/db';
-import type { TwilioRecordingPayload, TwilioRecordingStatus } from '@/types';
+import prisma from '@/lib/db';
+import { validateTwilioSignature, fetchRecordingAudio } from '@/lib/twilio';
+import { uploadRecording, getRecordingUrl } from '@/lib/storage';
+import type { TwilioRecordingPayload, ApiErrorResponse } from '@/types';
 
 /**
- * Fetches the recording audio from Twilio as a Buffer
- *
- * @param mediaUrl - The URL to the recording media (e.g., .mp3 or .wav)
- * @returns The audio data as a Buffer
+ * Parse form-urlencoded body from Twilio webhook
  */
-async function fetchRecordingFromTwilio(mediaUrl: string): Promise<Buffer> {
-  // Twilio requires authentication for recording downloads
-  const accountSid = process.env.TWILIO_ACCOUNT_SID;
-  const authToken = process.env.TWILIO_AUTH_TOKEN;
-
-  if (!accountSid || !authToken) {
-    throw new Error('Twilio credentials not configured');
-  }
-
-  // Create basic auth header
-  const credentials = Buffer.from(`${accountSid}:${authToken}`).toString('base64');
-
-  const response = await fetch(mediaUrl, {
-    headers: {
-      Authorization: `Basic ${credentials}`,
-    },
+async function parseFormData(request: NextRequest): Promise<Record<string, string>> {
+  const text = await request.text();
+  const params = new URLSearchParams(text);
+  const result: Record<string, string> = {};
+  params.forEach((value, key) => {
+    result[key] = value;
   });
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch recording: ${response.status} ${response.statusText}`);
-  }
-
-  const arrayBuffer = await response.arrayBuffer();
-  return Buffer.from(arrayBuffer);
+  return result;
 }
 
 /**
- * POST handler for Twilio recording status callbacks
- *
- * Twilio sends this webhook when a recording's status changes.
- * We're primarily interested in 'completed' status to fetch and store the recording.
+ * Map Twilio recording payload to typed interface
  */
-export async function POST(request: NextRequest): Promise<NextResponse> {
-  console.log('[Recording Webhook] Received recording status callback');
+function parseRecordingPayload(params: Record<string, string>): TwilioRecordingPayload {
+  return {
+    AccountSid: params.AccountSid || '',
+    CallSid: params.CallSid || '',
+    RecordingSid: params.RecordingSid || '',
+    RecordingUrl: params.RecordingUrl || '',
+    RecordingStatus: params.RecordingStatus as 'completed' | 'failed',
+    RecordingDuration: params.RecordingDuration || '0',
+    RecordingChannels: params.RecordingChannels || '1',
+    RecordingSource: params.RecordingSource || '',
+    RecordingStartTime: params.RecordingStartTime,
+  };
+}
 
+/**
+ * POST handler for Twilio recording status webhook
+ */
+export async function POST(
+  request: NextRequest
+): Promise<NextResponse<{ success: boolean } | ApiErrorResponse>> {
   try {
-    // Parse the form data from Twilio
-    const body = await parseTwilioWebhookBody(request);
+    // Parse the form-encoded body
+    const params = await parseFormData(request);
+    const payload = parseRecordingPayload(params);
 
-    // Validate that this request actually came from Twilio
-    const isValid = await validateTwilioSignature(request, body);
-    if (!isValid) {
-      console.warn('[Recording Webhook] Invalid Twilio signature');
+    // Validate Twilio signature for security
+    const signature = request.headers.get('x-twilio-signature') || '';
+    const url = request.url;
+
+    // Skip validation in development if no auth token configured
+    const shouldValidate = process.env.NODE_ENV === 'production' || process.env.TWILIO_AUTH_TOKEN;
+    if (shouldValidate && !validateTwilioSignature(signature, url, params)) {
+      console.error('Invalid Twilio signature');
       return NextResponse.json(
         { error: 'Invalid signature' },
         { status: 403 }
       );
     }
 
-    // Cast body to our typed payload
-    const payload = body as unknown as TwilioRecordingPayload;
-
-    console.log('[Recording Webhook] Recording status callback received:', {
+    // Log the incoming webhook
+    console.log('Recording webhook received:', {
       callSid: payload.CallSid,
       recordingSid: payload.RecordingSid,
       status: payload.RecordingStatus,
       duration: payload.RecordingDuration,
     });
 
-    // Handle different recording statuses
-    const status = payload.RecordingStatus as TwilioRecordingStatus;
+    // Find the call in our database
+    const call = await prisma.call.findUnique({
+      where: { twilioSid: payload.CallSid },
+    });
 
-    switch (status) {
-      case 'completed':
-        await handleRecordingCompleted(payload);
-        break;
-
-      case 'failed':
-        await handleRecordingFailed(payload);
-        break;
-
-      case 'in-progress':
-        // Recording is still in progress, nothing to do
-        console.log('[Recording Webhook] Recording in progress:', payload.RecordingSid);
-        break;
-
-      case 'absent':
-        // No recording was captured (e.g., call was too short)
-        console.log('[Recording Webhook] No recording captured for call:', payload.CallSid);
-        break;
-
-      default:
-        console.warn('[Recording Webhook] Unknown recording status:', status);
+    if (!call) {
+      console.warn(`Call not found for SID: ${payload.CallSid}`);
+      // Return success anyway to prevent Twilio from retrying
+      return NextResponse.json({ success: true });
     }
 
-    // Always return 200 to acknowledge receipt
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error('[Recording Webhook] Error processing recording callback:', error);
+    // Handle recording based on status
+    if (payload.RecordingStatus === 'completed') {
+      // Fetch the recording audio from Twilio
+      const audioBuffer = await fetchRecordingAudio(payload.RecordingUrl);
 
-    // Return 200 anyway to prevent Twilio from retrying
-    // We log the error for debugging but don't want Twilio to keep sending the same webhook
-    return NextResponse.json(
-      { error: 'Internal server error', acknowledged: true },
-      { status: 200 }
-    );
-  }
-}
+      if (!audioBuffer) {
+        console.error(`Failed to fetch recording audio for call ${call.id}`);
+        // Update call to indicate recording fetch failed
+        await prisma.call.update({
+          where: { id: call.id },
+          data: {
+            notes: call.notes
+              ? `${call.notes}\n[Recording fetch failed]`
+              : '[Recording fetch failed]',
+          },
+        });
+        return NextResponse.json({ success: true });
+      }
 
-/**
- * Handles a completed recording by fetching it from Twilio,
- * uploading to S3, and updating the database
- */
-async function handleRecordingCompleted(payload: TwilioRecordingPayload): Promise<void> {
-  const { CallSid, RecordingSid, RecordingUrl, RecordingDuration } = payload;
+      // Upload to S3 storage
+      const storageKey = await uploadRecording(call.id, audioBuffer);
 
-  console.log('[Recording Webhook] Processing completed recording:', {
-    callSid: CallSid,
-    recordingSid: RecordingSid,
-    duration: RecordingDuration,
-  });
+      if (!storageKey) {
+        console.error(`Failed to upload recording to S3 for call ${call.id}`);
+        // Update call to indicate upload failed
+        await prisma.call.update({
+          where: { id: call.id },
+          data: {
+            notes: call.notes
+              ? `${call.notes}\n[Recording upload failed]`
+              : '[Recording upload failed]',
+          },
+        });
+        return NextResponse.json({ success: true });
+      }
 
-  // Find the call record in our database
-  const call = await prisma.call.findUnique({
-    where: { twilioSid: CallSid },
-  });
+      // Generate a signed URL for the recording
+      const recordingUrl = await getRecordingUrl(storageKey);
 
-  if (!call) {
-    console.warn('[Recording Webhook] Call not found in database:', CallSid);
-    // Don't throw - the call might have been deleted or never created
-    return;
-  }
-
-  // If we already have a recording URL, skip processing (idempotency)
-  if (call.recordingUrl) {
-    console.log('[Recording Webhook] Recording already processed for call:', CallSid);
-    return;
-  }
-
-  try {
-    // Get recording details from Twilio
-    const twilioClient = getTwilioClient();
-    const recordingDetails = await twilioClient.getRecording(RecordingSid);
-
-    console.log('[Recording Webhook] Fetched recording details:', {
-      sid: recordingDetails.sid,
-      mediaUrl: recordingDetails.mediaUrl,
-      duration: recordingDetails.duration,
-    });
-
-    // Download the recording from Twilio
-    // Use .wav format for better quality (Twilio provides both .mp3 and .wav)
-    const wavUrl = recordingDetails.mediaUrl.replace('.mp3', '.wav');
-    const audioBuffer = await fetchRecordingFromTwilio(wavUrl);
-
-    console.log('[Recording Webhook] Downloaded recording, size:', audioBuffer.length, 'bytes');
-
-    // Upload to S3
-    const storageClient = getStorageClient();
-    const uploadResult = await storageClient.uploadRecording(call.id, audioBuffer);
-
-    console.log('[Recording Webhook] Uploaded to S3:', {
-      key: uploadResult.key,
-      size: uploadResult.size,
-    });
-
-    // Update the call record with the recording URL
-    // We store the S3 URL, not the Twilio URL, so we have full control over the recording
-    await prisma.call.update({
-      where: { id: call.id },
-      data: {
-        recordingUrl: uploadResult.url,
-        duration: parseInt(RecordingDuration, 10) || recordingDetails.duration,
-      },
-    });
-
-    console.log('[Recording Webhook] Successfully processed recording for call:', CallSid);
-  } catch (error) {
-    console.error('[Recording Webhook] Error processing recording:', {
-      callSid: CallSid,
-      recordingSid: RecordingSid,
-      error: error instanceof Error ? error.message : error,
-    });
-
-    // Re-throw to let the outer handler deal with it
-    throw error;
-  }
-}
-
-/**
- * Handles a failed recording by logging the error
- * and optionally updating the call record
- */
-async function handleRecordingFailed(payload: TwilioRecordingPayload): Promise<void> {
-  const { CallSid, RecordingSid, ErrorCode } = payload;
-
-  console.error('[Recording Webhook] Recording failed:', {
-    callSid: CallSid,
-    recordingSid: RecordingSid,
-    errorCode: ErrorCode,
-  });
-
-  // Optionally update the call record to indicate recording failure
-  // We don't fail the call itself, just note that recording failed
-  try {
-    const call = await prisma.call.findUnique({
-      where: { twilioSid: CallSid },
-    });
-
-    if (call && !call.notes?.includes('Recording failed')) {
-      const existingNotes = call.notes || '';
-      const failureNote = `Recording failed (Error: ${ErrorCode || 'unknown'})`;
-
+      // Update the call record with the recording URL
       await prisma.call.update({
         where: { id: call.id },
         data: {
-          notes: existingNotes ? `${existingNotes}\n${failureNote}` : failureNote,
+          recordingUrl: recordingUrl || storageKey, // Fall back to storage key if URL generation fails
+          duration: parseInt(payload.RecordingDuration, 10) || call.duration,
+        },
+      });
+
+      console.log(`Recording processed successfully for call ${call.id}`);
+    } else if (payload.RecordingStatus === 'failed') {
+      // Log recording failure
+      console.error(`Recording failed for call ${call.id}:`, {
+        recordingSid: payload.RecordingSid,
+        callSid: payload.CallSid,
+      });
+
+      // Update call to indicate recording failed
+      await prisma.call.update({
+        where: { id: call.id },
+        data: {
+          notes: call.notes
+            ? `${call.notes}\n[Recording failed]`
+            : '[Recording failed]',
         },
       });
     }
+
+    // Always return success to Twilio
+    return NextResponse.json({ success: true });
   } catch (error) {
-    console.error('[Recording Webhook] Error updating call with recording failure:', error);
-    // Don't re-throw - we've logged the error, that's sufficient
+    console.error('Error processing recording webhook:', error);
+    // Return success to prevent Twilio from retrying on server errors
+    // We log the error for investigation but don't block Twilio
+    return NextResponse.json({ success: true });
   }
 }

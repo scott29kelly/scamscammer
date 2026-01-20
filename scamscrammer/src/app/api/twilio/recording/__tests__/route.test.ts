@@ -1,321 +1,357 @@
 /**
- * Tests for Recording Complete Webhook Handler
- *
- * These tests verify the webhook handler correctly:
- * - Validates Twilio signatures
- * - Handles completed recordings
- * - Handles failed recordings
- * - Handles edge cases gracefully
+ * Recording Complete Webhook Handler Tests
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { NextRequest } from 'next/server';
 import { POST } from '../route';
+import { NextRequest } from 'next/server';
+import prisma from '@/lib/db';
+import * as twilioLib from '@/lib/twilio';
+import * as storageLib from '@/lib/storage';
+import { CallStatus } from '@prisma/client';
 
 // Mock the dependencies
-vi.mock('@/lib/twilio', () => ({
-  validateTwilioSignature: vi.fn(),
-  parseTwilioWebhookBody: vi.fn(),
-  getTwilioClient: vi.fn(),
-}));
-
-vi.mock('@/lib/storage', () => ({
-  getStorageClient: vi.fn(),
-}));
-
-vi.mock('@/lib/db', () => ({
-  prisma: {
+jest.mock('@/lib/db', () => ({
+  __esModule: true,
+  default: {
     call: {
-      findUnique: vi.fn(),
-      update: vi.fn(),
+      findUnique: jest.fn(),
+      update: jest.fn(),
     },
   },
 }));
 
-// Import mocked modules
-import {
-  validateTwilioSignature,
-  parseTwilioWebhookBody,
-  getTwilioClient,
-} from '@/lib/twilio';
-import { getStorageClient } from '@/lib/storage';
-import { prisma } from '@/lib/db';
+jest.mock('@/lib/twilio', () => ({
+  validateTwilioSignature: jest.fn(),
+  fetchRecordingAudio: jest.fn(),
+}));
 
-// Type the mocks
-const mockValidateSignature = vi.mocked(validateTwilioSignature);
-const mockParseBody = vi.mocked(parseTwilioWebhookBody);
-const mockGetTwilioClient = vi.mocked(getTwilioClient);
-const mockGetStorageClient = vi.mocked(getStorageClient);
-const mockPrismaCall = vi.mocked(prisma.call);
+jest.mock('@/lib/storage', () => ({
+  uploadRecording: jest.fn(),
+  getRecordingUrl: jest.fn(),
+}));
 
-// Mock fetch for downloading recordings
-const mockFetch = vi.fn();
-global.fetch = mockFetch;
+const mockPrisma = prisma as jest.Mocked<typeof prisma>;
+const mockTwilio = twilioLib as jest.Mocked<typeof twilioLib>;
+const mockStorage = storageLib as jest.Mocked<typeof storageLib>;
 
-describe('Recording Webhook Handler', () => {
-  const mockRequest = {} as NextRequest;
+/**
+ * Create a mock NextRequest with form-encoded body
+ */
+function createMockRequest(params: Record<string, string>): NextRequest {
+  const body = new URLSearchParams(params).toString();
+  return new NextRequest('https://example.com/api/twilio/recording', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+      'x-twilio-signature': 'valid-signature',
+    },
+    body,
+  });
+}
 
-  const baseRecordingPayload = {
-    AccountSid: 'AC123456789',
-    CallSid: 'CA123456789',
-    RecordingSid: 'RE123456789',
-    RecordingUrl: 'https://api.twilio.com/recordings/RE123456789',
-    RecordingStatus: 'completed',
-    RecordingDuration: '120',
-    RecordingChannels: '1',
-    RecordingSource: 'RecordVerb',
-  };
+/**
+ * Default recording webhook payload
+ */
+const defaultPayload = {
+  AccountSid: 'AC123456',
+  CallSid: 'CA123456',
+  RecordingSid: 'RE123456',
+  RecordingUrl: 'https://api.twilio.com/recordings/RE123456',
+  RecordingStatus: 'completed',
+  RecordingDuration: '120',
+  RecordingChannels: '1',
+  RecordingSource: 'RecordVerb',
+};
 
-  const mockCall = {
-    id: 'call-123',
-    twilioSid: 'CA123456789',
-    fromNumber: '+15551234567',
-    toNumber: '+15559876543',
-    status: 'IN_PROGRESS',
-    duration: null,
-    recordingUrl: null,
-    transcriptUrl: null,
-    rating: null,
-    notes: null,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  };
+/**
+ * Default mock call from database
+ */
+const mockCall = {
+  id: 'call-123',
+  twilioSid: 'CA123456',
+  fromNumber: '+15551234567',
+  toNumber: '+15559876543',
+  status: CallStatus.COMPLETED,
+  duration: 120,
+  recordingUrl: null,
+  transcriptUrl: null,
+  rating: null,
+  notes: null,
+  tags: [],
+  createdAt: new Date(),
+  updatedAt: new Date(),
+};
 
-  const mockRecordingDetails = {
-    sid: 'RE123456789',
-    callSid: 'CA123456789',
-    status: 'completed',
-    duration: 120,
-    url: '/2010-04-01/Accounts/AC123/Recordings/RE123456789',
-    mediaUrl: 'https://api.twilio.com/2010-04-01/Accounts/AC123/Recordings/RE123456789.mp3',
-  };
-
-  const mockUploadResult = {
-    key: 'recordings/2024-01-19/call-123.wav',
-    url: 'https://bucket.s3.amazonaws.com/recordings/2024-01-19/call-123.wav',
-    size: 1024000,
-  };
-
+describe('POST /api/twilio/recording', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-
-    // Set up environment variables
-    process.env.TWILIO_ACCOUNT_SID = 'AC123456789';
-    process.env.TWILIO_AUTH_TOKEN = 'test-auth-token';
-
-    // Default mock implementations
-    mockParseBody.mockResolvedValue(baseRecordingPayload as Record<string, string>);
-    mockValidateSignature.mockResolvedValue(true);
+    jest.clearAllMocks();
+    // Default mocks for successful flow
+    mockTwilio.validateTwilioSignature.mockReturnValue(true);
+    mockTwilio.fetchRecordingAudio.mockResolvedValue(Buffer.from('fake audio'));
+    mockStorage.uploadRecording.mockResolvedValue('recordings/2026/01/call-123.mp3');
+    mockStorage.getRecordingUrl.mockResolvedValue('https://s3.amazonaws.com/signed-url');
+    (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(mockCall);
+    (mockPrisma.call.update as jest.Mock).mockResolvedValue({ ...mockCall, recordingUrl: 'https://s3.amazonaws.com/signed-url' });
   });
 
-  afterEach(() => {
-    delete process.env.TWILIO_ACCOUNT_SID;
-    delete process.env.TWILIO_AUTH_TOKEN;
-  });
-
-  describe('Signature Validation', () => {
-    it('should reject requests with invalid signatures', async () => {
-      mockValidateSignature.mockResolvedValue(false);
-
-      const response = await POST(mockRequest);
-      const data = await response.json();
-
-      expect(response.status).toBe(403);
-      expect(data.error).toBe('Invalid signature');
-    });
-
-    it('should accept requests with valid signatures', async () => {
-      mockValidateSignature.mockResolvedValue(true);
-      mockPrismaCall.findUnique.mockResolvedValue(null);
-
-      const response = await POST(mockRequest);
+  describe('successful recording processing', () => {
+    it('should process completed recording and update call record', async () => {
+      const request = createMockRequest(defaultPayload);
+      const response = await POST(request);
       const data = await response.json();
 
       expect(response.status).toBe(200);
-      expect(data.success).toBe(true);
-    });
-  });
+      expect(data).toEqual({ success: true });
 
-  describe('Recording Completed', () => {
-    it('should process completed recordings successfully', async () => {
-      // Set up mocks for successful flow
-      mockPrismaCall.findUnique.mockResolvedValue(mockCall);
-      mockGetTwilioClient.mockReturnValue({
-        getRecording: vi.fn().mockResolvedValue(mockRecordingDetails),
-      } as unknown as ReturnType<typeof getTwilioClient>);
+      // Verify Twilio audio was fetched
+      expect(mockTwilio.fetchRecordingAudio).toHaveBeenCalledWith(
+        'https://api.twilio.com/recordings/RE123456'
+      );
 
-      mockFetch.mockResolvedValue({
-        ok: true,
-        arrayBuffer: () => Promise.resolve(new ArrayBuffer(1024)),
-      });
+      // Verify recording was uploaded to S3
+      expect(mockStorage.uploadRecording).toHaveBeenCalledWith(
+        'call-123',
+        expect.any(Buffer)
+      );
 
-      mockGetStorageClient.mockReturnValue({
-        uploadRecording: vi.fn().mockResolvedValue(mockUploadResult),
-      } as unknown as ReturnType<typeof getStorageClient>);
+      // Verify signed URL was generated
+      expect(mockStorage.getRecordingUrl).toHaveBeenCalledWith(
+        'recordings/2026/01/call-123.mp3'
+      );
 
-      mockPrismaCall.update.mockResolvedValue({ ...mockCall, recordingUrl: mockUploadResult.url });
-
-      const response = await POST(mockRequest);
-      const data = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(data.success).toBe(true);
-      expect(mockPrismaCall.update).toHaveBeenCalledWith({
+      // Verify call was updated with recording URL
+      expect(mockPrisma.call.update).toHaveBeenCalledWith({
         where: { id: 'call-123' },
         data: {
-          recordingUrl: mockUploadResult.url,
+          recordingUrl: 'https://s3.amazonaws.com/signed-url',
           duration: 120,
         },
       });
     });
 
-    it('should skip processing if recording URL already exists', async () => {
-      mockPrismaCall.findUnique.mockResolvedValue({
-        ...mockCall,
-        recordingUrl: 'https://existing-url.com/recording.wav',
+    it('should parse recording duration from payload', async () => {
+      const request = createMockRequest({
+        ...defaultPayload,
+        RecordingDuration: '300',
       });
 
-      const response = await POST(mockRequest);
-      const data = await response.json();
+      await POST(request);
 
-      expect(response.status).toBe(200);
-      expect(data.success).toBe(true);
-      expect(mockPrismaCall.update).not.toHaveBeenCalled();
-    });
-
-    it('should handle missing call gracefully', async () => {
-      mockPrismaCall.findUnique.mockResolvedValue(null);
-
-      const response = await POST(mockRequest);
-      const data = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(data.success).toBe(true);
-      expect(mockGetStorageClient).not.toHaveBeenCalled();
+      expect(mockPrisma.call.update).toHaveBeenCalledWith({
+        where: { id: 'call-123' },
+        data: expect.objectContaining({
+          duration: 300,
+        }),
+      });
     });
   });
 
-  describe('Recording Failed', () => {
-    it('should handle failed recordings', async () => {
-      mockParseBody.mockResolvedValue({
-        ...baseRecordingPayload,
-        RecordingStatus: 'failed',
-        ErrorCode: '12345',
-      } as Record<string, string>);
+  describe('signature validation', () => {
+    it('should reject requests with invalid signature in production', async () => {
+      const originalEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'production';
+      mockTwilio.validateTwilioSignature.mockReturnValue(false);
 
-      mockPrismaCall.findUnique.mockResolvedValue(mockCall);
-      mockPrismaCall.update.mockResolvedValue({ ...mockCall, notes: 'Recording failed (Error: 12345)' });
+      const request = createMockRequest(defaultPayload);
+      const response = await POST(request);
+      const data = await response.json();
 
-      const response = await POST(mockRequest);
+      expect(response.status).toBe(403);
+      expect(data).toEqual({ error: 'Invalid signature' });
+
+      process.env.NODE_ENV = originalEnv;
+    });
+
+    it('should validate signature when TWILIO_AUTH_TOKEN is set', async () => {
+      const originalToken = process.env.TWILIO_AUTH_TOKEN;
+      process.env.TWILIO_AUTH_TOKEN = 'test-token';
+      mockTwilio.validateTwilioSignature.mockReturnValue(false);
+
+      const request = createMockRequest(defaultPayload);
+      const response = await POST(request);
+      const data = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(data).toEqual({ error: 'Invalid signature' });
+
+      process.env.TWILIO_AUTH_TOKEN = originalToken;
+    });
+  });
+
+  describe('call not found', () => {
+    it('should return success even if call is not found', async () => {
+      (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(null);
+
+      const request = createMockRequest(defaultPayload);
+      const response = await POST(request);
       const data = await response.json();
 
       expect(response.status).toBe(200);
-      expect(data.success).toBe(true);
-      expect(mockPrismaCall.update).toHaveBeenCalledWith({
+      expect(data).toEqual({ success: true });
+
+      // Should not attempt to fetch or upload recording
+      expect(mockTwilio.fetchRecordingAudio).not.toHaveBeenCalled();
+      expect(mockStorage.uploadRecording).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('recording fetch failure', () => {
+    it('should handle Twilio recording fetch failure gracefully', async () => {
+      mockTwilio.fetchRecordingAudio.mockResolvedValue(null);
+
+      const request = createMockRequest(defaultPayload);
+      const response = await POST(request);
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(data).toEqual({ success: true });
+
+      // Should update call notes with failure message
+      expect(mockPrisma.call.update).toHaveBeenCalledWith({
         where: { id: 'call-123' },
         data: {
-          notes: 'Recording failed (Error: 12345)',
+          notes: '[Recording fetch failed]',
+        },
+      });
+
+      // Should not attempt S3 upload
+      expect(mockStorage.uploadRecording).not.toHaveBeenCalled();
+    });
+
+    it('should append to existing notes when fetch fails', async () => {
+      (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue({
+        ...mockCall,
+        notes: 'Existing notes',
+      });
+      mockTwilio.fetchRecordingAudio.mockResolvedValue(null);
+
+      const request = createMockRequest(defaultPayload);
+      await POST(request);
+
+      expect(mockPrisma.call.update).toHaveBeenCalledWith({
+        where: { id: 'call-123' },
+        data: {
+          notes: 'Existing notes\n[Recording fetch failed]',
         },
       });
     });
+  });
 
-    it('should append to existing notes when recording fails', async () => {
-      mockParseBody.mockResolvedValue({
-        ...baseRecordingPayload,
-        RecordingStatus: 'failed',
-        ErrorCode: '12345',
-      } as Record<string, string>);
+  describe('S3 upload failure', () => {
+    it('should handle S3 upload failure gracefully', async () => {
+      mockStorage.uploadRecording.mockResolvedValue(null);
 
-      mockPrismaCall.findUnique.mockResolvedValue({
-        ...mockCall,
-        notes: 'Existing note',
-      });
-      mockPrismaCall.update.mockResolvedValue({
-        ...mockCall,
-        notes: 'Existing note\nRecording failed (Error: 12345)',
-      });
-
-      const response = await POST(mockRequest);
+      const request = createMockRequest(defaultPayload);
+      const response = await POST(request);
       const data = await response.json();
 
       expect(response.status).toBe(200);
-      expect(mockPrismaCall.update).toHaveBeenCalledWith({
+      expect(data).toEqual({ success: true });
+
+      // Should update call notes with failure message
+      expect(mockPrisma.call.update).toHaveBeenCalledWith({
         where: { id: 'call-123' },
         data: {
-          notes: 'Existing note\nRecording failed (Error: 12345)',
+          notes: '[Recording upload failed]',
         },
       });
     });
   });
 
-  describe('Other Recording Statuses', () => {
-    it('should handle in-progress status', async () => {
-      mockParseBody.mockResolvedValue({
-        ...baseRecordingPayload,
-        RecordingStatus: 'in-progress',
-      } as Record<string, string>);
+  describe('recording failed status', () => {
+    it('should handle failed recording status', async () => {
+      const request = createMockRequest({
+        ...defaultPayload,
+        RecordingStatus: 'failed',
+      });
 
-      const response = await POST(mockRequest);
+      const response = await POST(request);
       const data = await response.json();
 
       expect(response.status).toBe(200);
-      expect(data.success).toBe(true);
-      expect(mockPrismaCall.findUnique).not.toHaveBeenCalled();
-    });
+      expect(data).toEqual({ success: true });
 
-    it('should handle absent status', async () => {
-      mockParseBody.mockResolvedValue({
-        ...baseRecordingPayload,
-        RecordingStatus: 'absent',
-      } as Record<string, string>);
+      // Should not fetch or upload recording
+      expect(mockTwilio.fetchRecordingAudio).not.toHaveBeenCalled();
+      expect(mockStorage.uploadRecording).not.toHaveBeenCalled();
 
-      const response = await POST(mockRequest);
-      const data = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(data.success).toBe(true);
-      expect(mockPrismaCall.findUnique).not.toHaveBeenCalled();
+      // Should update call notes with failure message
+      expect(mockPrisma.call.update).toHaveBeenCalledWith({
+        where: { id: 'call-123' },
+        data: {
+          notes: '[Recording failed]',
+        },
+      });
     });
   });
 
-  describe('Error Handling', () => {
-    it('should return 200 even when errors occur to prevent Twilio retries', async () => {
-      mockPrismaCall.findUnique.mockRejectedValue(new Error('Database error'));
+  describe('URL generation failure', () => {
+    it('should fallback to storage key when URL generation fails', async () => {
+      mockStorage.getRecordingUrl.mockResolvedValue(null);
 
-      const response = await POST(mockRequest);
+      const request = createMockRequest(defaultPayload);
+      await POST(request);
+
+      // Should still update with the storage key as fallback
+      expect(mockPrisma.call.update).toHaveBeenCalledWith({
+        where: { id: 'call-123' },
+        data: {
+          recordingUrl: 'recordings/2026/01/call-123.mp3',
+          duration: 120,
+        },
+      });
+    });
+  });
+
+  describe('error handling', () => {
+    it('should return success even on unexpected errors', async () => {
+      (mockPrisma.call.findUnique as jest.Mock).mockRejectedValue(
+        new Error('Database connection failed')
+      );
+
+      const request = createMockRequest(defaultPayload);
+      const response = await POST(request);
+      const data = await response.json();
+
+      // Return success to prevent Twilio from retrying
+      expect(response.status).toBe(200);
+      expect(data).toEqual({ success: true });
+    });
+  });
+
+  describe('payload parsing', () => {
+    it('should handle missing optional fields', async () => {
+      const minimalPayload = {
+        AccountSid: 'AC123456',
+        CallSid: 'CA123456',
+        RecordingSid: 'RE123456',
+        RecordingUrl: 'https://api.twilio.com/recordings/RE123456',
+        RecordingStatus: 'completed',
+      };
+
+      const request = createMockRequest(minimalPayload);
+      const response = await POST(request);
+      const data = await response.json();
 
       expect(response.status).toBe(200);
+      expect(data).toEqual({ success: true });
     });
 
-    it('should handle Twilio recording fetch errors', async () => {
-      mockPrismaCall.findUnique.mockResolvedValue(mockCall);
-      mockGetTwilioClient.mockReturnValue({
-        getRecording: vi.fn().mockRejectedValue(new Error('Twilio error')),
-      } as unknown as ReturnType<typeof getTwilioClient>);
-
-      const response = await POST(mockRequest);
-
-      expect(response.status).toBe(200);
-    });
-
-    it('should handle storage upload errors', async () => {
-      mockPrismaCall.findUnique.mockResolvedValue(mockCall);
-      mockGetTwilioClient.mockReturnValue({
-        getRecording: vi.fn().mockResolvedValue(mockRecordingDetails),
-      } as unknown as ReturnType<typeof getTwilioClient>);
-
-      mockFetch.mockResolvedValue({
-        ok: true,
-        arrayBuffer: () => Promise.resolve(new ArrayBuffer(1024)),
+    it('should handle non-numeric duration gracefully', async () => {
+      const request = createMockRequest({
+        ...defaultPayload,
+        RecordingDuration: 'invalid',
       });
 
-      mockGetStorageClient.mockReturnValue({
-        uploadRecording: vi.fn().mockRejectedValue(new Error('S3 error')),
-      } as unknown as ReturnType<typeof getStorageClient>);
+      await POST(request);
 
-      const response = await POST(mockRequest);
-
-      expect(response.status).toBe(200);
+      // Should use existing duration from call record when parsing fails
+      expect(mockPrisma.call.update).toHaveBeenCalledWith({
+        where: { id: 'call-123' },
+        data: expect.objectContaining({
+          duration: 120, // Falls back to existing duration
+        }),
+      });
     });
   });
 });
