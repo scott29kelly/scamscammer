@@ -1,382 +1,274 @@
 /**
- * Tests for Twilio Client and Helpers
+ * Twilio Helper Utilities Tests
  */
 
 import {
-  TwilioClient,
-  validateTwilioSignature,
   formatPhoneNumber,
-  parsePhoneNumber,
+  formatPhoneNumberForDisplay,
   isValidPhoneNumber,
-  maskPhoneNumber,
-  mapTwilioStatus,
-  parseTwilioFormData,
-  getTwilioClient,
-  resetTwilioClient,
+  isTwilioWebhookPayload,
+  generateTwiMLResponse,
+  generateStreamTwiML,
+  generateGreetingAndStreamTwiML,
+  generateHangupTwiML,
+  generateFallbackTwiML,
+  buildWebSocketUrl,
+  getEarlGreeting,
 } from '../twilio';
 
-// Mock the twilio module
-jest.mock('twilio', () => {
-  const mockCallsFetch = jest.fn();
-  const mockCallsUpdate = jest.fn();
-  const mockRecordingFetch = jest.fn();
-  const mockRecordingsList = jest.fn();
-
-  const mockClient = jest.fn(() => ({
-    calls: jest.fn((sid?: string) => ({
-      fetch: mockCallsFetch,
-      update: mockCallsUpdate,
-    })),
-    recordings: jest.fn((sid?: string) => ({
-      fetch: mockRecordingFetch,
-      list: mockRecordingsList,
-    })),
-  }));
-
-  // Add named exports
-  (mockClient as unknown as { validateRequest: jest.Mock }).validateRequest = jest.fn();
-
-  return {
-    __esModule: true,
-    default: mockClient,
-    Twilio: mockClient,
-    twiml: {
-      VoiceResponse: jest.fn().mockImplementation(() => {
-        const nodes: string[] = [];
-        const response = {
-          say: jest.fn((options, message) => {
-            const attrs = Object.entries(options)
-              .filter(([, v]) => v !== undefined)
-              .map(([k, v]) => `${k}="${v}"`)
-              .join(' ');
-            nodes.push(`<Say ${attrs}>${message}</Say>`);
-          }),
-          record: jest.fn((options) => {
-            const attrs = Object.entries(options)
-              .filter(([, v]) => v !== undefined)
-              .map(([k, v]) => `${k}="${v}"`)
-              .join(' ');
-            nodes.push(`<Record ${attrs}/>`);
-          }),
-          connect: jest.fn(() => ({
-            stream: jest.fn((options) => ({
-              parameter: jest.fn((param) => {
-                nodes.push(`<Stream url="${options.url}"><Parameter name="${param.name}" value="${param.value}"/></Stream>`);
-              }),
-            })),
-          })),
-          toString: jest.fn(() => `<?xml version="1.0" encoding="UTF-8"?><Response>${nodes.join('')}</Response>`),
-        };
-        return response;
-      }),
-    },
-    validateRequest: jest.fn(),
-  };
-});
-
-describe('Twilio Client and Helpers', () => {
-  const originalEnv = process.env;
-
-  beforeEach(() => {
-    jest.clearAllMocks();
-    resetTwilioClient();
-    process.env = {
-      ...originalEnv,
-      TWILIO_ACCOUNT_SID: 'test_account_sid',
-      TWILIO_AUTH_TOKEN: 'test_auth_token',
-      TWILIO_PHONE_NUMBER: '+15551234567',
-    };
-  });
-
-  afterAll(() => {
-    process.env = originalEnv;
-  });
-
-  describe('TwilioClient', () => {
-    describe('constructor', () => {
-      it('should create client with environment variables', () => {
-        const client = new TwilioClient();
-        expect(client).toBeDefined();
-        expect(client.getPhoneNumber()).toBe('+15551234567');
-      });
-
-      it('should create client with explicit config', () => {
-        const client = new TwilioClient({
-          accountSid: 'custom_sid',
-          authToken: 'custom_token',
-          phoneNumber: '+15559876543',
-        });
-        expect(client).toBeDefined();
-        expect(client.getPhoneNumber()).toBe('+15559876543');
-      });
-
-      it('should throw error if credentials not configured', () => {
-        process.env.TWILIO_ACCOUNT_SID = '';
-        process.env.TWILIO_AUTH_TOKEN = '';
-        expect(() => new TwilioClient()).toThrow('Twilio credentials not configured');
-      });
-    });
-
-    describe('generateTwiMLResponse', () => {
-      it('should generate TwiML with string message', () => {
-        const client = new TwilioClient();
-        const result = client.generateTwiMLResponse('Hello, this is Earl speaking.');
-
-        expect(result).toContain('<?xml version="1.0" encoding="UTF-8"?>');
-        expect(result).toContain('<Response>');
-        expect(result).toContain('<Say');
-        expect(result).toContain('Hello, this is Earl speaking.');
-      });
-
-      it('should generate TwiML with options object', () => {
-        const client = new TwilioClient();
-        const result = client.generateTwiMLResponse({
-          message: 'Test message',
-          voice: 'Polly.Joanna',
-          language: 'en-GB',
-        });
-
-        expect(result).toContain('<Response>');
-        expect(result).toContain('Test message');
-      });
-    });
-
-    describe('generateStreamTwiML', () => {
-      it('should generate TwiML for WebSocket streaming', () => {
-        const client = new TwilioClient();
-        const result = client.generateStreamTwiML({
-          websocketUrl: 'wss://example.com/stream',
-        });
-
-        expect(result).toContain('<Response>');
-      });
-
-      it('should include greeting when provided', () => {
-        const client = new TwilioClient();
-        const result = client.generateStreamTwiML({
-          websocketUrl: 'wss://example.com/stream',
-          greeting: 'Hello there!',
-        });
-
-        expect(result).toContain('<Response>');
-        expect(result).toContain('Hello there!');
-      });
-    });
-
-    describe('generateRecordingTwiML', () => {
-      it('should generate TwiML with recording', () => {
-        const client = new TwilioClient();
-        const result = client.generateRecordingTwiML({
-          message: 'Recording will begin now.',
-          statusCallbackUrl: 'https://example.com/recording-callback',
-        });
-
-        expect(result).toContain('<Response>');
-        expect(result).toContain('<Record');
-        expect(result).toContain('Recording will begin now.');
-      });
-    });
-
-    describe('getClient', () => {
-      it('should return the underlying Twilio client', () => {
-        const client = new TwilioClient();
-        const underlyingClient = client.getClient();
-        expect(underlyingClient).toBeDefined();
-      });
-    });
-  });
-
-  describe('validateTwilioSignature', () => {
-    it('should call validateRequest with correct params', () => {
-      const { validateRequest } = jest.requireMock('twilio');
-      validateRequest.mockReturnValue(true);
-
-      const result = validateTwilioSignature(
-        'auth_token',
-        'signature',
-        'https://example.com/webhook',
-        { CallSid: 'CA123' }
-      );
-
-      expect(validateRequest).toHaveBeenCalledWith(
-        'auth_token',
-        'signature',
-        'https://example.com/webhook',
-        { CallSid: 'CA123' }
-      );
-      expect(result).toBe(true);
-    });
-  });
-
+describe('Twilio Helper Utilities', () => {
   describe('formatPhoneNumber', () => {
-    it('should keep E.164 format as is', () => {
-      expect(formatPhoneNumber('+15551234567')).toBe('+15551234567');
-    });
-
-    it('should add + prefix and country code to 10-digit number', () => {
+    it('should format US 10-digit number to E.164', () => {
       expect(formatPhoneNumber('5551234567')).toBe('+15551234567');
     });
 
-    it('should add + prefix to 11-digit number with country code', () => {
+    it('should keep E.164 format unchanged', () => {
+      expect(formatPhoneNumber('+15551234567')).toBe('+15551234567');
+    });
+
+    it('should handle US number with country code but no +', () => {
       expect(formatPhoneNumber('15551234567')).toBe('+15551234567');
     });
 
-    it('should remove non-digit characters', () => {
+    it('should handle number with formatting characters', () => {
       expect(formatPhoneNumber('(555) 123-4567')).toBe('+15551234567');
     });
 
-    it('should handle different country codes', () => {
-      expect(formatPhoneNumber('5551234567', '44')).toBe('+445551234567');
+    it('should handle number with dots', () => {
+      expect(formatPhoneNumber('555.123.4567')).toBe('+15551234567');
     });
 
-    it('should remove leading zeros', () => {
-      expect(formatPhoneNumber('05551234567')).toBe('+15551234567');
+    it('should preserve international numbers with +', () => {
+      expect(formatPhoneNumber('+442071234567')).toBe('+442071234567');
     });
   });
 
-  describe('parsePhoneNumber', () => {
-    it('should parse US number with country code', () => {
-      const result = parsePhoneNumber('+15551234567');
-      expect(result.countryCode).toBe('1');
-      expect(result.areaCode).toBe('555');
-      expect(result.localNumber).toBe('1234567');
-      expect(result.formatted).toBe('+1 (555) 123-4567');
+  describe('formatPhoneNumberForDisplay', () => {
+    it('should format US E.164 number for display', () => {
+      expect(formatPhoneNumberForDisplay('+15551234567')).toBe('+1 (555) 123-4567');
     });
 
-    it('should parse 10-digit US number', () => {
-      const result = parsePhoneNumber('5551234567');
-      expect(result.countryCode).toBe('1');
-      expect(result.areaCode).toBe('555');
-      expect(result.localNumber).toBe('1234567');
+    it('should format 10-digit US number for display', () => {
+      expect(formatPhoneNumberForDisplay('5551234567')).toBe('(555) 123-4567');
     });
 
-    it('should handle international numbers', () => {
-      const result = parsePhoneNumber('+442071234567');
-      expect(result.countryCode).toBe('44');
-      expect(result.areaCode).toBe('207');
+    it('should return international numbers as-is', () => {
+      const intlNumber = '+442071234567';
+      expect(formatPhoneNumberForDisplay(intlNumber)).toBe(intlNumber);
     });
   });
 
   describe('isValidPhoneNumber', () => {
-    it('should return true for valid 10-digit number', () => {
-      expect(isValidPhoneNumber('5551234567')).toBe(true);
-    });
-
-    it('should return true for valid 11-digit number', () => {
-      expect(isValidPhoneNumber('15551234567')).toBe(true);
-    });
-
-    it('should return true for valid E.164 format', () => {
+    it('should validate E.164 US number', () => {
       expect(isValidPhoneNumber('+15551234567')).toBe(true);
     });
 
-    it('should return false for too short number', () => {
-      expect(isValidPhoneNumber('123456')).toBe(false);
+    it('should validate 10-digit number', () => {
+      expect(isValidPhoneNumber('5551234567')).toBe(true);
     });
 
-    it('should return false for too long number', () => {
-      expect(isValidPhoneNumber('1234567890123456')).toBe(false);
-    });
-  });
-
-  describe('maskPhoneNumber', () => {
-    it('should mask all but last 4 digits', () => {
-      expect(maskPhoneNumber('+15551234567')).toBe('*******4567');
+    it('should validate international numbers', () => {
+      expect(isValidPhoneNumber('+442071234567')).toBe(true);
     });
 
-    it('should handle short numbers', () => {
-      expect(maskPhoneNumber('123')).toBe('****');
+    it('should reject too short numbers', () => {
+      expect(isValidPhoneNumber('12345')).toBe(false);
     });
 
-    it('should handle numbers with formatting', () => {
-      expect(maskPhoneNumber('(555) 123-4567')).toBe('******4567');
+    it('should reject too long numbers', () => {
+      expect(isValidPhoneNumber('12345678901234567890')).toBe(false);
     });
   });
 
-  describe('mapTwilioStatus', () => {
-    it('should map queued to RINGING', () => {
-      expect(mapTwilioStatus('queued')).toBe('RINGING');
+  describe('isTwilioWebhookPayload', () => {
+    it('should return true for valid payload', () => {
+      const payload = {
+        CallSid: 'CA123',
+        AccountSid: 'AC123',
+        From: '+15551234567',
+        To: '+15559876543',
+      };
+      expect(isTwilioWebhookPayload(payload)).toBe(true);
     });
 
-    it('should map ringing to RINGING', () => {
-      expect(mapTwilioStatus('ringing')).toBe('RINGING');
+    it('should return false for missing CallSid', () => {
+      const payload = {
+        AccountSid: 'AC123',
+        From: '+15551234567',
+        To: '+15559876543',
+      };
+      expect(isTwilioWebhookPayload(payload)).toBe(false);
     });
 
-    it('should map in-progress to IN_PROGRESS', () => {
-      expect(mapTwilioStatus('in-progress')).toBe('IN_PROGRESS');
-    });
-
-    it('should map initiated to IN_PROGRESS', () => {
-      expect(mapTwilioStatus('initiated')).toBe('IN_PROGRESS');
-    });
-
-    it('should map answered to IN_PROGRESS', () => {
-      expect(mapTwilioStatus('answered')).toBe('IN_PROGRESS');
-    });
-
-    it('should map completed to COMPLETED', () => {
-      expect(mapTwilioStatus('completed')).toBe('COMPLETED');
-    });
-
-    it('should map busy to FAILED', () => {
-      expect(mapTwilioStatus('busy')).toBe('FAILED');
-    });
-
-    it('should map failed to FAILED', () => {
-      expect(mapTwilioStatus('failed')).toBe('FAILED');
-    });
-
-    it('should map canceled to FAILED', () => {
-      expect(mapTwilioStatus('canceled')).toBe('FAILED');
-    });
-
-    it('should map no-answer to NO_ANSWER', () => {
-      expect(mapTwilioStatus('no-answer')).toBe('NO_ANSWER');
-    });
-
-    it('should be case insensitive', () => {
-      expect(mapTwilioStatus('COMPLETED')).toBe('COMPLETED');
-      expect(mapTwilioStatus('In-Progress')).toBe('IN_PROGRESS');
-    });
-
-    it('should map unknown status to FAILED', () => {
-      expect(mapTwilioStatus('unknown-status')).toBe('FAILED');
-    });
-  });
-
-  describe('parseTwilioFormData', () => {
-    it('should parse form data from request', async () => {
-      const formData = new FormData();
-      formData.append('CallSid', 'CA123');
-      formData.append('From', '+15551234567');
-      formData.append('To', '+15559876543');
-
-      const mockRequest = {
-        formData: jest.fn().mockResolvedValue(formData),
-      } as unknown as Request;
-
-      const result = await parseTwilioFormData(mockRequest);
-
-      expect(result).toEqual({
+    it('should return false for missing AccountSid', () => {
+      const payload = {
         CallSid: 'CA123',
         From: '+15551234567',
         To: '+15559876543',
-      });
+      };
+      expect(isTwilioWebhookPayload(payload)).toBe(false);
+    });
+
+    it('should return false for missing From', () => {
+      const payload = {
+        CallSid: 'CA123',
+        AccountSid: 'AC123',
+        To: '+15559876543',
+      };
+      expect(isTwilioWebhookPayload(payload)).toBe(false);
+    });
+
+    it('should return false for missing To', () => {
+      const payload = {
+        CallSid: 'CA123',
+        AccountSid: 'AC123',
+        From: '+15551234567',
+      };
+      expect(isTwilioWebhookPayload(payload)).toBe(false);
+    });
+
+    it('should return false for empty object', () => {
+      expect(isTwilioWebhookPayload({})).toBe(false);
     });
   });
 
-  describe('getTwilioClient singleton', () => {
-    it('should return the same instance on multiple calls', () => {
-      const client1 = getTwilioClient();
-      const client2 = getTwilioClient();
-      expect(client1).toBe(client2);
+  describe('generateTwiMLResponse', () => {
+    it('should generate valid TwiML with message', () => {
+      const twiml = generateTwiMLResponse('Hello there!');
+      expect(twiml).toContain('<?xml version="1.0" encoding="UTF-8"?>');
+      expect(twiml).toContain('<Response>');
+      expect(twiml).toContain('<Say');
+      expect(twiml).toContain('Hello there!');
+      expect(twiml).toContain('</Response>');
     });
 
-    it('should create new instance after reset', () => {
-      const client1 = getTwilioClient();
-      resetTwilioClient();
-      const client2 = getTwilioClient();
-      expect(client1).not.toBe(client2);
+    it('should include voice attribute', () => {
+      const twiml = generateTwiMLResponse('Test', { voice: 'Polly.Joanna' });
+      expect(twiml).toContain('voice="Polly.Joanna"');
+    });
+
+    it('should include language attribute', () => {
+      const twiml = generateTwiMLResponse('Test', { language: 'en-GB' });
+      expect(twiml).toContain('language="en-GB"');
+    });
+
+    it('should include pause when specified', () => {
+      const twiml = generateTwiMLResponse('Test', { pauseLength: 2 });
+      expect(twiml).toContain('<Pause');
+      expect(twiml).toContain('length="2"');
+    });
+  });
+
+  describe('generateStreamTwiML', () => {
+    it('should generate TwiML with stream connection', () => {
+      const twiml = generateStreamTwiML('wss://example.com/stream');
+      expect(twiml).toContain('<Response>');
+      expect(twiml).toContain('<Connect>');
+      expect(twiml).toContain('<Stream');
+      expect(twiml).toContain('url="wss://example.com/stream"');
+      expect(twiml).toContain('</Connect>');
+    });
+
+    it('should include track attribute', () => {
+      const twiml = generateStreamTwiML('wss://example.com/stream', { track: 'inbound' });
+      expect(twiml).toContain('track="inbound_track"');
+    });
+
+    it('should default to both tracks', () => {
+      const twiml = generateStreamTwiML('wss://example.com/stream');
+      expect(twiml).toContain('track="both_tracks"');
+    });
+  });
+
+  describe('generateGreetingAndStreamTwiML', () => {
+    it('should generate TwiML with greeting then stream', () => {
+      const twiml = generateGreetingAndStreamTwiML(
+        'Hello friend!',
+        'wss://example.com/stream'
+      );
+      expect(twiml).toContain('<Response>');
+      expect(twiml).toContain('<Say');
+      expect(twiml).toContain('Hello friend!');
+      expect(twiml).toContain('<Connect>');
+      expect(twiml).toContain('<Stream');
+      expect(twiml).toContain('url="wss://example.com/stream"');
+    });
+
+    it('should include voice and language options', () => {
+      const twiml = generateGreetingAndStreamTwiML(
+        'Hi there!',
+        'wss://example.com/stream',
+        { voice: 'Polly.Matthew', language: 'en-US' }
+      );
+      expect(twiml).toContain('voice="Polly.Matthew"');
+      expect(twiml).toContain('language="en-US"');
+    });
+  });
+
+  describe('generateHangupTwiML', () => {
+    it('should generate TwiML with just hangup', () => {
+      const twiml = generateHangupTwiML();
+      expect(twiml).toContain('<Response>');
+      expect(twiml).toContain('<Hangup/>');
+    });
+
+    it('should include message before hangup when provided', () => {
+      const twiml = generateHangupTwiML('Goodbye!');
+      expect(twiml).toContain('<Say');
+      expect(twiml).toContain('Goodbye!');
+      expect(twiml).toContain('<Hangup/>');
+    });
+  });
+
+  describe('generateFallbackTwiML', () => {
+    it('should generate fallback message with hangup', () => {
+      const twiml = generateFallbackTwiML();
+      expect(twiml).toContain('<Response>');
+      expect(twiml).toContain('<Say');
+      expect(twiml).toContain('hearing aid');
+      expect(twiml).toContain('<Hangup/>');
+    });
+  });
+
+  describe('buildWebSocketUrl', () => {
+    it('should convert https to wss', () => {
+      const wsUrl = buildWebSocketUrl('https://example.com', 'CA123');
+      expect(wsUrl).toBe('wss://example.com/api/voice/stream?callSid=CA123');
+    });
+
+    it('should convert http to ws', () => {
+      const wsUrl = buildWebSocketUrl('http://localhost:3000', 'CA123');
+      expect(wsUrl).toBe('ws://localhost:3000/api/voice/stream?callSid=CA123');
+    });
+
+    it('should URL encode the callSid', () => {
+      const wsUrl = buildWebSocketUrl('https://example.com', 'CA123=test');
+      expect(wsUrl).toContain('callSid=CA123%3Dtest');
+    });
+  });
+
+  describe('getEarlGreeting', () => {
+    it('should return a non-empty greeting', () => {
+      const greeting = getEarlGreeting();
+      expect(typeof greeting).toBe('string');
+      expect(greeting.length).toBeGreaterThan(50);
+    });
+
+    it('should mention Earl', () => {
+      // Run multiple times to ensure Earl is mentioned
+      for (let i = 0; i < 10; i++) {
+        const greeting = getEarlGreeting();
+        expect(greeting.toLowerCase()).toContain('earl');
+      }
+    });
+
+    it('should return different greetings (randomization)', () => {
+      const greetings = new Set<string>();
+      // Get 20 greetings - should get at least 2 different ones
+      for (let i = 0; i < 20; i++) {
+        greetings.add(getEarlGreeting());
+      }
+      expect(greetings.size).toBeGreaterThan(1);
     });
   });
 });

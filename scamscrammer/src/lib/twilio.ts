@@ -1,584 +1,320 @@
 /**
- * Twilio Client and Helpers
+ * Twilio Client and Helper Utilities
  *
- * This module provides Twilio integration for voice calls in ScamScrammer.
- * It wraps the Twilio SDK and provides helper functions for:
- * - Generating TwiML responses
- * - Validating webhook signatures
- * - Fetching call and recording details
- * - Phone number formatting
+ * This module provides utilities for working with Twilio webhooks,
+ * validating signatures, generating TwiML responses, and formatting phone numbers.
  */
 
-import twilio, { Twilio } from 'twilio';
-import { twiml as TwiML } from 'twilio';
-import { validateRequest } from 'twilio';
+import twilio from 'twilio';
+import type { NextRequest } from 'next/server';
+
+// Define the TwilioWebhookPayload interface inline to avoid path resolution issues
+interface TwilioWebhookPayload {
+  CallSid: string;
+  AccountSid: string;
+  From: string;
+  To: string;
+  CallStatus: string;
+  ApiVersion: string;
+  Direction: string;
+  ForwardedFrom?: string;
+  CallerName?: string;
+  FromCity?: string;
+  FromState?: string;
+  FromZip?: string;
+  FromCountry?: string;
+  ToCity?: string;
+  ToState?: string;
+  ToZip?: string;
+  ToCountry?: string;
+}
+
+const { validateRequest } = twilio;
+const VoiceResponse = twilio.twiml.VoiceResponse;
+
+// Map our simplified track values to Twilio's expected values
+const TRACK_MAP = {
+  inbound: 'inbound_track',
+  outbound: 'outbound_track',
+  both: 'both_tracks',
+} as const;
 
 /**
- * Configuration for the Twilio client
+ * Parse Twilio webhook body from URL-encoded form data
+ * @param request - The incoming Next.js request
+ * @returns The parsed body as a record
  */
-export interface TwilioConfig {
-  accountSid: string;
-  authToken: string;
-  phoneNumber?: string;
+export async function parseTwilioWebhookBody(
+  request: NextRequest
+): Promise<Record<string, string>> {
+  const body = await request.text();
+  const params = new URLSearchParams(body);
+  const result: Record<string, string> = {};
+
+  for (const [key, value] of params.entries()) {
+    result[key] = value;
+  }
+
+  return result;
 }
 
 /**
- * Options for generating stream TwiML
+ * Check if the parsed body is a valid Twilio webhook payload
+ * @param body - The parsed request body
+ * @returns True if the body contains required Twilio fields
  */
-export interface StreamTwiMLOptions {
-  /** The WebSocket URL to connect to for media streaming */
-  websocketUrl: string;
-  /** Initial greeting message before connecting to stream */
-  greeting?: string;
-  /** Track to stream: inbound_track, outbound_track, or both_tracks */
-  track?: 'inbound_track' | 'outbound_track' | 'both_tracks';
-}
-
-/** Default voice for Earl persona (older male American voice) */
-const DEFAULT_VOICE = 'Polly.Matthew' as const;
-const DEFAULT_LANGUAGE = 'en-US' as const;
-
-/**
- * Options for generating voice TwiML
- */
-export interface VoiceTwiMLOptions {
-  /** The message to speak */
-  message: string;
-  /** Voice to use for text-to-speech - Polly or Google voice names */
-  voice?: string;
-  /** Language for text-to-speech */
-  language?: string;
-  /** Whether to loop the message */
-  loop?: number;
+export function isTwilioWebhookPayload(
+  body: Record<string, string>
+): body is TwilioWebhookPayload & Record<string, string> {
+  return !!(body.CallSid && body.AccountSid && body.From && body.To);
 }
 
 /**
- * Call details returned from Twilio API
- */
-export interface CallDetails {
-  sid: string;
-  accountSid: string;
-  from: string;
-  to: string;
-  status: string;
-  startTime: Date | null;
-  endTime: Date | null;
-  duration: string | null;
-  direction: string;
-  answeredBy: string | null;
-  callerName: string | null;
-  forwardedFrom: string | null;
-  price: string | null;
-  priceUnit: string | null;
-}
-
-/**
- * Recording details returned from Twilio API
- */
-export interface RecordingDetails {
-  sid: string;
-  accountSid: string;
-  callSid: string;
-  duration: string;
-  status: string;
-  channels: number;
-  source: string;
-  startTime: Date;
-  price: string | null;
-  priceUnit: string | null;
-  uri: string;
-  mediaUrl: string;
-}
-
-/**
- * TwilioClient class wrapping the Twilio SDK
- */
-export class TwilioClient {
-  private client: Twilio;
-  private config: TwilioConfig;
-
-  constructor(config?: Partial<TwilioConfig>) {
-    this.config = {
-      accountSid: config?.accountSid || process.env.TWILIO_ACCOUNT_SID || '',
-      authToken: config?.authToken || process.env.TWILIO_AUTH_TOKEN || '',
-      phoneNumber: config?.phoneNumber || process.env.TWILIO_PHONE_NUMBER,
-    };
-
-    if (!this.config.accountSid || !this.config.authToken) {
-      throw new Error('Twilio credentials not configured. Set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN environment variables.');
-    }
-
-    this.client = twilio(this.config.accountSid, this.config.authToken);
-  }
-
-  /**
-   * Get the underlying Twilio client for advanced operations
-   */
-  getClient(): Twilio {
-    return this.client;
-  }
-
-  /**
-   * Get the configured phone number
-   */
-  getPhoneNumber(): string | undefined {
-    return this.config.phoneNumber;
-  }
-
-  /**
-   * Generate TwiML response for a voice message
-   * @param options - Voice TwiML options
-   * @returns TwiML XML string
-   */
-  generateTwiMLResponse(options: VoiceTwiMLOptions | string): string {
-    const response = new TwiML.VoiceResponse();
-
-    if (typeof options === 'string') {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      response.say({ voice: DEFAULT_VOICE, language: DEFAULT_LANGUAGE } as any, options);
-    } else {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      response.say(
-        {
-          voice: options.voice || DEFAULT_VOICE,
-          language: options.language || DEFAULT_LANGUAGE,
-          loop: options.loop,
-        } as any,
-        options.message
-      );
-    }
-
-    return response.toString();
-  }
-
-  /**
-   * Generate TwiML for connecting to a WebSocket media stream
-   * @param options - Stream TwiML options
-   * @returns TwiML XML string
-   */
-  generateStreamTwiML(options: StreamTwiMLOptions): string {
-    const response = new TwiML.VoiceResponse();
-
-    // Play initial greeting if provided
-    if (options.greeting) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      response.say({ voice: DEFAULT_VOICE, language: DEFAULT_LANGUAGE } as any, options.greeting);
-    }
-
-    // Connect to WebSocket for bidirectional media streaming
-    const connect = response.connect();
-    const stream = connect.stream({
-      url: options.websocketUrl,
-    });
-
-    // Set the track to stream
-    if (options.track) {
-      stream.parameter({ name: 'track', value: options.track });
-    }
-
-    return response.toString();
-  }
-
-  /**
-   * Generate TwiML for recording a call
-   * @param options - Recording options
-   * @returns TwiML XML string
-   */
-  generateRecordingTwiML(options: {
-    message?: string;
-    statusCallbackUrl?: string;
-    transcribe?: boolean;
-    maxLength?: number;
-    timeout?: number;
-  }): string {
-    const response = new TwiML.VoiceResponse();
-
-    if (options.message) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      response.say({ voice: DEFAULT_VOICE, language: DEFAULT_LANGUAGE } as any, options.message);
-    }
-
-    response.record({
-      recordingStatusCallback: options.statusCallbackUrl,
-      recordingStatusCallbackEvent: ['completed', 'absent'],
-      transcribe: options.transcribe,
-      maxLength: options.maxLength || 3600, // 1 hour max
-      timeout: options.timeout || 30,
-    });
-
-    return response.toString();
-  }
-
-  /**
-   * Generate TwiML that starts recording and connects to a WebSocket stream
-   * @param options - Combined options for greeting, recording, and streaming
-   * @returns TwiML XML string
-   */
-  generateFullCallTwiML(options: {
-    greeting?: string;
-    websocketUrl: string;
-    statusCallbackUrl?: string;
-    recordingStatusCallbackUrl?: string;
-  }): string {
-    const response = new TwiML.VoiceResponse();
-
-    // Start call recording if callback URL is provided
-    if (options.recordingStatusCallbackUrl) {
-      response.record({
-        recordingStatusCallback: options.recordingStatusCallbackUrl,
-        recordingStatusCallbackEvent: ['completed', 'absent'],
-        maxLength: 3600,
-      });
-    }
-
-    // Play initial greeting
-    if (options.greeting) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      response.say({ voice: DEFAULT_VOICE, language: DEFAULT_LANGUAGE } as any, options.greeting);
-    }
-
-    // Connect to WebSocket for AI conversation
-    const connect = response.connect();
-    connect.stream({
-      url: options.websocketUrl,
-    });
-
-    return response.toString();
-  }
-
-  /**
-   * Fetch call details from Twilio API
-   * @param callSid - The Twilio Call SID
-   * @returns Call details
-   */
-  async getCallDetails(callSid: string): Promise<CallDetails> {
-    const call = await this.client.calls(callSid).fetch();
-
-    return {
-      sid: call.sid,
-      accountSid: call.accountSid,
-      from: call.from,
-      to: call.to,
-      status: call.status,
-      startTime: call.startTime,
-      endTime: call.endTime,
-      duration: call.duration,
-      direction: call.direction,
-      answeredBy: call.answeredBy,
-      callerName: call.callerName,
-      forwardedFrom: call.forwardedFrom,
-      price: call.price,
-      priceUnit: call.priceUnit,
-    };
-  }
-
-  /**
-   * Fetch recording details from Twilio API
-   * @param recordingSid - The Twilio Recording SID
-   * @returns Recording details
-   */
-  async getRecording(recordingSid: string): Promise<RecordingDetails> {
-    const recording = await this.client.recordings(recordingSid).fetch();
-
-    return {
-      sid: recording.sid,
-      accountSid: recording.accountSid,
-      callSid: recording.callSid,
-      duration: recording.duration,
-      status: recording.status,
-      channels: recording.channels,
-      source: recording.source,
-      startTime: recording.startTime,
-      price: recording.price,
-      priceUnit: recording.priceUnit,
-      uri: recording.uri,
-      mediaUrl: `https://api.twilio.com${recording.uri.replace('.json', '.mp3')}`,
-    };
-  }
-
-  /**
-   * Get the recording audio URL with authentication
-   * @param recordingSid - The Twilio Recording SID
-   * @returns Authenticated URL to download the recording
-   */
-  getRecordingUrl(recordingSid: string): string {
-    return `https://api.twilio.com/2010-04-01/Accounts/${this.config.accountSid}/Recordings/${recordingSid}.mp3`;
-  }
-
-  /**
-   * Download recording audio as a Buffer
-   * @param recordingSid - The Twilio Recording SID
-   * @returns Audio buffer
-   */
-  async downloadRecording(recordingSid: string): Promise<Buffer> {
-    const url = this.getRecordingUrl(recordingSid);
-    const credentials = Buffer.from(`${this.config.accountSid}:${this.config.authToken}`).toString('base64');
-
-    const response = await fetch(url, {
-      headers: {
-        Authorization: `Basic ${credentials}`,
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to download recording: ${response.status} ${response.statusText}`);
-    }
-
-    const arrayBuffer = await response.arrayBuffer();
-    return Buffer.from(arrayBuffer);
-  }
-
-  /**
-   * List recordings for a specific call
-   * @param callSid - The Twilio Call SID
-   * @returns List of recordings
-   */
-  async listRecordingsForCall(callSid: string): Promise<RecordingDetails[]> {
-    const recordings = await this.client.recordings.list({ callSid, limit: 20 });
-
-    return recordings.map((recording) => ({
-      sid: recording.sid,
-      accountSid: recording.accountSid,
-      callSid: recording.callSid,
-      duration: recording.duration,
-      status: recording.status,
-      channels: recording.channels,
-      source: recording.source,
-      startTime: recording.startTime,
-      price: recording.price,
-      priceUnit: recording.priceUnit,
-      uri: recording.uri,
-      mediaUrl: `https://api.twilio.com${recording.uri.replace('.json', '.mp3')}`,
-    }));
-  }
-
-  /**
-   * End an active call
-   * @param callSid - The Twilio Call SID
-   * @returns Updated call details
-   */
-  async endCall(callSid: string): Promise<CallDetails> {
-    const call = await this.client.calls(callSid).update({ status: 'completed' });
-
-    return {
-      sid: call.sid,
-      accountSid: call.accountSid,
-      from: call.from,
-      to: call.to,
-      status: call.status,
-      startTime: call.startTime,
-      endTime: call.endTime,
-      duration: call.duration,
-      direction: call.direction,
-      answeredBy: call.answeredBy,
-      callerName: call.callerName,
-      forwardedFrom: call.forwardedFrom,
-      price: call.price,
-      priceUnit: call.priceUnit,
-    };
-  }
-}
-
-/**
- * Validate Twilio webhook request signature
- * @param authToken - Twilio Auth Token
- * @param signature - X-Twilio-Signature header value
- * @param url - Full URL of the webhook endpoint
- * @param params - Request body parameters
- * @returns true if signature is valid
+ * Validate Twilio webhook signature for security
+ * @param request - The incoming Next.js request
+ * @param body - The parsed body as a record
+ * @returns True if the signature is valid
  */
 export function validateTwilioSignature(
-  authToken: string,
-  signature: string,
-  url: string,
-  params: Record<string, string>
-): boolean {
-  return validateRequest(authToken, signature, url, params);
-}
-
-/**
- * Validate Twilio webhook request from NextJS request object
- * @param request - NextJS Request object
- * @param body - Parsed request body
- * @returns true if signature is valid
- */
-export async function validateTwilioWebhook(
-  request: Request,
+  request: NextRequest,
   body: Record<string, string>
-): Promise<boolean> {
+): boolean {
   const authToken = process.env.TWILIO_AUTH_TOKEN;
-  if (!authToken) {
-    throw new Error('TWILIO_AUTH_TOKEN environment variable not set');
-  }
 
-  const signature = request.headers.get('x-twilio-signature');
-  if (!signature) {
+  if (!authToken) {
+    console.error('[Twilio] Missing TWILIO_AUTH_TOKEN environment variable');
     return false;
   }
 
-  // Get the full URL from the request
+  // In development, optionally skip validation
+  if (process.env.NODE_ENV === 'development' && process.env.SKIP_TWILIO_VALIDATION === 'true') {
+    console.warn('[Twilio] Skipping signature validation in development mode');
+    return true;
+  }
+
+  const signature = request.headers.get('x-twilio-signature') || '';
   const url = request.url;
 
-  return validateTwilioSignature(authToken, signature, url, body);
+  return validateRequest(authToken, signature, url, body);
 }
 
 /**
- * Format a phone number to E.164 format
- * @param phoneNumber - Phone number in any format
- * @param defaultCountryCode - Default country code if not present (default: '1' for US)
- * @returns Phone number in E.164 format (+1234567890)
+ * Format phone number to E.164 format
+ * @param phoneNumber - The phone number to format
+ * @returns The formatted phone number
  */
-export function formatPhoneNumber(phoneNumber: string, defaultCountryCode: string = '1'): string {
+export function formatPhoneNumber(phoneNumber: string): string {
   // Remove all non-digit characters except leading +
   let cleaned = phoneNumber.replace(/[^\d+]/g, '');
 
-  // If it starts with +, keep it
-  if (cleaned.startsWith('+')) {
-    return cleaned;
+  // If starts with +, keep it; otherwise assume US and add +1
+  if (!cleaned.startsWith('+')) {
+    // Remove leading 1 if present (US country code without +)
+    if (cleaned.startsWith('1') && cleaned.length === 11) {
+      cleaned = '+' + cleaned;
+    } else if (cleaned.length === 10) {
+      cleaned = '+1' + cleaned;
+    } else {
+      cleaned = '+' + cleaned;
+    }
   }
 
-  // Remove any leading zeros
-  cleaned = cleaned.replace(/^0+/, '');
-
-  // If the number doesn't start with a country code, add the default
-  if (cleaned.length <= 10) {
-    cleaned = defaultCountryCode + cleaned;
-  }
-
-  // Add + prefix
-  return '+' + cleaned;
+  return cleaned;
 }
 
 /**
- * Parse phone number into components
- * @param phoneNumber - Phone number in E.164 format
- * @returns Object with country code, area code, and local number
+ * Format phone number for display (US format)
+ * @param phoneNumber - The phone number in E.164 format
+ * @returns Human-readable phone number
  */
-export function parsePhoneNumber(phoneNumber: string): {
-  countryCode: string;
-  areaCode: string;
-  localNumber: string;
-  formatted: string;
-} {
+export function formatPhoneNumberForDisplay(phoneNumber: string): string {
   const cleaned = phoneNumber.replace(/[^\d]/g, '');
 
-  // Assume North American format for now
   if (cleaned.length === 11 && cleaned.startsWith('1')) {
-    return {
-      countryCode: '1',
-      areaCode: cleaned.substring(1, 4),
-      localNumber: cleaned.substring(4),
-      formatted: `+1 (${cleaned.substring(1, 4)}) ${cleaned.substring(4, 7)}-${cleaned.substring(7)}`,
-    };
+    // US number: +1 (555) 123-4567
+    return `+1 (${cleaned.slice(1, 4)}) ${cleaned.slice(4, 7)}-${cleaned.slice(7)}`;
+  } else if (cleaned.length === 10) {
+    // US number without country code
+    return `(${cleaned.slice(0, 3)}) ${cleaned.slice(3, 6)}-${cleaned.slice(6)}`;
   }
 
-  if (cleaned.length === 10) {
-    return {
-      countryCode: '1',
-      areaCode: cleaned.substring(0, 3),
-      localNumber: cleaned.substring(3),
-      formatted: `+1 (${cleaned.substring(0, 3)}) ${cleaned.substring(3, 6)}-${cleaned.substring(6)}`,
-    };
-  }
-
-  // Fallback for international numbers
-  return {
-    countryCode: cleaned.substring(0, cleaned.length - 10) || '1',
-    areaCode: cleaned.substring(cleaned.length - 10, cleaned.length - 7),
-    localNumber: cleaned.substring(cleaned.length - 7),
-    formatted: '+' + cleaned,
-  };
+  // Return as-is for international numbers
+  return phoneNumber;
 }
 
 /**
- * Check if a phone number appears to be a valid format
- * @param phoneNumber - Phone number to validate
- * @returns true if the phone number appears valid
+ * Check if a phone number is valid
+ * @param phoneNumber - The phone number to validate
+ * @returns True if the phone number appears valid
  */
 export function isValidPhoneNumber(phoneNumber: string): boolean {
-  const cleaned = phoneNumber.replace(/[^\d]/g, '');
-
-  // Valid lengths: 10 (US without country), 11 (US with country), or longer for international
-  return cleaned.length >= 10 && cleaned.length <= 15;
+  const cleaned = phoneNumber.replace(/[^\d+]/g, '');
+  // Must have at least 10 digits and optionally start with +
+  return /^\+?\d{10,15}$/.test(cleaned);
 }
 
 /**
- * Mask a phone number for privacy (show only last 4 digits)
- * @param phoneNumber - Phone number to mask
- * @returns Masked phone number
+ * Generate a simple TwiML response with a message
+ * @param message - The message to say
+ * @param options - Optional voice settings
+ * @returns TwiML XML string
  */
-export function maskPhoneNumber(phoneNumber: string): string {
-  const cleaned = phoneNumber.replace(/[^\d]/g, '');
-  if (cleaned.length < 4) {
-    return '****';
+export function generateTwiMLResponse(
+  message: string,
+  options?: {
+    voice?: string;
+    language?: string;
+    pauseLength?: number;
   }
-  return '*'.repeat(cleaned.length - 4) + cleaned.slice(-4);
-}
+): string {
+  const response = new VoiceResponse();
 
-/**
- * Map Twilio call status to our internal CallStatus enum
- * @param twilioStatus - Twilio call status string
- * @returns Our internal status string
- */
-export function mapTwilioStatus(
-  twilioStatus: string
-): 'RINGING' | 'IN_PROGRESS' | 'COMPLETED' | 'FAILED' | 'NO_ANSWER' {
-  switch (twilioStatus.toLowerCase()) {
-    case 'queued':
-    case 'ringing':
-      return 'RINGING';
-    case 'in-progress':
-    case 'initiated':
-    case 'answered':
-      return 'IN_PROGRESS';
-    case 'completed':
-      return 'COMPLETED';
-    case 'busy':
-    case 'failed':
-    case 'canceled':
-      return 'FAILED';
-    case 'no-answer':
-      return 'NO_ANSWER';
-    default:
-      return 'FAILED';
+  // Using type assertion since Twilio SDK has strict literal types
+  response.say(
+    {
+      voice: (options?.voice || 'Polly.Matthew') as 'Polly.Matthew',
+      language: (options?.language || 'en-US') as 'en-US',
+    },
+    message
+  );
+
+  if (options?.pauseLength) {
+    response.pause({ length: options.pauseLength });
   }
+
+  return response.toString();
 }
 
 /**
- * Parse form data from a Twilio webhook request
- * @param request - The incoming Request object
- * @returns Parsed form data as a Record
+ * Generate TwiML that connects to a WebSocket for real-time streaming
+ * @param websocketUrl - The WebSocket URL to connect to
+ * @param options - Optional stream settings
+ * @returns TwiML XML string
  */
-export async function parseTwilioFormData(request: Request): Promise<Record<string, string>> {
-  const formData = await request.formData();
-  const params: Record<string, string> = {};
+export function generateStreamTwiML(
+  websocketUrl: string,
+  options?: {
+    track?: 'inbound' | 'outbound' | 'both';
+  }
+): string {
+  const response = new VoiceResponse();
 
-  formData.forEach((value, key) => {
-    params[key] = value.toString();
+  const connect = response.connect();
+  const track = TRACK_MAP[options?.track || 'both'];
+  connect.stream({
+    url: websocketUrl,
+    track,
   });
 
-  return params;
+  return response.toString();
 }
 
-// Create a singleton instance for convenience
-let twilioClientInstance: TwilioClient | null = null;
-
 /**
- * Get the singleton TwilioClient instance
- * @returns TwilioClient instance
+ * Generate TwiML that says a greeting then connects to WebSocket for streaming
+ * @param greeting - The greeting message to say first
+ * @param websocketUrl - The WebSocket URL to connect to
+ * @param options - Optional settings
+ * @returns TwiML XML string
  */
-export function getTwilioClient(): TwilioClient {
-  if (!twilioClientInstance) {
-    twilioClientInstance = new TwilioClient();
+export function generateGreetingAndStreamTwiML(
+  greeting: string,
+  websocketUrl: string,
+  options?: {
+    voice?: string;
+    language?: string;
+    track?: 'inbound' | 'outbound' | 'both';
   }
-  return twilioClientInstance;
+): string {
+  const response = new VoiceResponse();
+
+  // Say the greeting first - using type assertion for Twilio SDK strict types
+  response.say(
+    {
+      voice: (options?.voice || 'Polly.Matthew') as 'Polly.Matthew',
+      language: (options?.language || 'en-US') as 'en-US',
+    },
+    greeting
+  );
+
+  // Then connect to WebSocket for real-time streaming
+  const connect = response.connect();
+  const track = TRACK_MAP[options?.track || 'both'];
+  connect.stream({
+    url: websocketUrl,
+    track,
+  });
+
+  return response.toString();
 }
 
 /**
- * Reset the singleton instance (useful for testing)
+ * Generate TwiML to hangup the call with an optional message
+ * @param message - Optional message to say before hanging up
+ * @returns TwiML XML string
  */
-export function resetTwilioClient(): void {
-  twilioClientInstance = null;
+export function generateHangupTwiML(message?: string): string {
+  const response = new VoiceResponse();
+
+  if (message) {
+    response.say(
+      {
+        voice: 'Polly.Matthew' as const,
+        language: 'en-US' as const,
+      },
+      message
+    );
+  }
+
+  response.hangup();
+
+  return response.toString();
 }
 
-export default TwilioClient;
+/**
+ * Generate a fallback TwiML response for error cases
+ * @returns TwiML XML string with a friendly error message
+ */
+export function generateFallbackTwiML(): string {
+  const response = new VoiceResponse();
+
+  response.say(
+    {
+      voice: 'Polly.Matthew' as const,
+      language: 'en-US' as const,
+    },
+    "Well I'll be... my hearing aid seems to be acting up. Could you call back in a minute? Sorry about that, friend."
+  );
+
+  response.hangup();
+
+  return response.toString();
+}
+
+/**
+ * Build the WebSocket URL for voice streaming
+ * @param baseUrl - The base URL of the application
+ * @param callSid - The Twilio call SID
+ * @returns The WebSocket URL
+ */
+export function buildWebSocketUrl(baseUrl: string, callSid: string): string {
+  // Convert http(s) to ws(s)
+  const wsUrl = baseUrl.replace(/^http/, 'ws');
+  return `${wsUrl}/api/voice/stream?callSid=${encodeURIComponent(callSid)}`;
+}
+
+/**
+ * Get Earl's initial greeting for answering calls
+ * @returns A friendly greeting in Earl's voice
+ */
+export function getEarlGreeting(): string {
+  const greetings = [
+    "Hello? Hello? Oh, wonderful! Someone's calling! This is Earl speaking, Earl Pemberton. Hold on just a second, let me turn up my hearing aid... there we go. Now, who am I speaking with today?",
+    "Well hello there! You've reached Earl Pemberton. Boy oh boy, I wasn't expecting a call today! Let me just put down my coffee here... okay, now what can I do for you, friend?",
+    "Hello? Is someone there? Oh good! This is Earl. Earl Pemberton. My neighbor Mabel said I should get one of those answering machines, but I like talking to real people. Who's this?",
+    "Why hello! Earl Pemberton here. I was just feeding General Patton - that's my parakeet, you know - when I heard the phone. Now, what brings you to call old Earl today?",
+    "Hello, hello! This is Earl speaking. You caught me right in the middle of my crossword puzzle, but that's alright. I always have time for a chat. What's your name, friend?",
+  ];
+
+  const index = Math.floor(Math.random() * greetings.length);
+  return greetings[index];
+}

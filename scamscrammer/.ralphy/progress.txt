@@ -1,0 +1,63 @@
+# ScamScrammer Development Progress
+
+## Completed Tasks
+
+### Create Incoming Call Webhook Handler (2026-01-19)
+
+Implemented the complete incoming call webhook handler for Twilio integration.
+
+#### Files Created/Modified:
+
+1. **src/lib/twilio.ts** - Twilio client and helper utilities
+   - `parseTwilioWebhookBody()` - Parse URL-encoded Twilio webhook body
+   - `isTwilioWebhookPayload()` - Validate webhook payload structure
+   - `validateTwilioSignature()` - Security validation for Twilio requests
+   - `formatPhoneNumber()` - Format phone numbers to E.164 format
+   - `formatPhoneNumberForDisplay()` - Human-readable phone number formatting
+   - `isValidPhoneNumber()` - Phone number validation
+   - `generateTwiMLResponse()` - Generate simple TwiML with voice message
+   - `generateStreamTwiML()` - Generate TwiML for WebSocket streaming
+   - `generateGreetingAndStreamTwiML()` - Combined greeting + stream TwiML
+   - `generateHangupTwiML()` - Generate hangup TwiML
+   - `generateFallbackTwiML()` - Error fallback TwiML (Earl-style message)
+   - `buildWebSocketUrl()` - Build WebSocket URL for voice streaming
+   - `getEarlGreeting()` - Random Earl greeting messages
+
+2. **src/app/api/twilio/incoming/route.ts** - Incoming call webhook handler
+   - POST handler for incoming Twilio calls
+   - Validates Twilio signature for security
+   - Creates call record in database with RINGING status
+   - Returns TwiML with Earl greeting + WebSocket connection
+   - Graceful error handling with fallback TwiML
+   - OPTIONS handler for CORS preflight
+
+3. **src/lib/__tests__/twilio.test.ts** - 38 tests for Twilio helpers
+   - Phone number formatting tests
+   - Validation tests
+   - TwiML generation tests
+   - WebSocket URL building tests
+   - Earl greeting tests
+
+4. **src/app/api/twilio/incoming/__tests__/route.test.ts** - 15 tests for webhook handler
+   - Successful call processing
+   - Signature validation
+   - Error handling
+   - Database interaction
+   - CORS support
+
+5. **tsconfig.json** - TypeScript configuration with path aliases
+
+#### Dependencies Added:
+- `twilio` - Twilio SDK for TwiML generation and signature validation
+
+#### Test Results:
+- All 53 tests passing
+- 38 tests for Twilio helpers
+- 15 tests for incoming call webhook
+
+#### Architecture Notes:
+- Webhook validates Twilio signature to prevent unauthorized requests
+- Call records are created with RINGING status upon receiving incoming call
+- TwiML response includes Earl's greeting followed by WebSocket connection
+- Fallback TwiML ensures calls don't drop on errors (stays in character as Earl)
+- WebSocket URL is built from NEXT_PUBLIC_APP_URL or extracted from request
