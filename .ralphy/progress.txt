@@ -61,3 +61,127 @@ Implemented the Twilio Recording Complete Webhook Handler for ScamScrammer. This
    - Add failure note to call record
 6. Return success response
 
+### Files created/modified:
+- `scamscrammer/prisma/schema.prisma` - Database schema with Call, CallSegment models and enums
+- `scamscrammer/prisma.config.ts` - Prisma 7 configuration
+- `scamscrammer/src/lib/db.ts` - Prisma client singleton
+- `scamscrammer/src/types/index.ts` - TypeScript type definitions
+- `scamscrammer/src/app/api/stats/route.ts` - Stats API endpoint
+- `scamscrammer/src/app/api/stats/__tests__/route.test.ts` - API tests
+- `scamscrammer/jest.config.mjs` - Jest configuration
+- `scamscrammer/jest.setup.js` - Jest setup
+- `scamscrammer/package.json` - Added test scripts and dependencies
+
+---
+
+## Task: Create Recording Complete Webhook Handler
+
+**Status:** Completed
+**Date:** 2026-01-19
+
+### What was done:
+
+1. **Created Twilio helper library**
+   - Created `src/lib/twilio.ts` with:
+     - `validateTwilioSignature()` - Validates Twilio webhook request signatures using HMAC-SHA1
+     - `formatPhoneNumber()` - Formats phone numbers to E.164 format
+     - `TwilioClient` class with methods:
+       - `getAuthToken()` - Returns auth token for signature validation
+       - `getCallDetails()` - Fetches call details from Twilio API
+       - `getRecording()` - Downloads recording audio as Buffer
+       - `generateTwiMLResponse()` - Generates basic TwiML
+       - `generateStreamTwiML()` - Generates TwiML with WebSocket streaming
+     - TypeScript interfaces for TwilioRecordingPayload and TwilioCallDetails
+
+2. **Created S3 storage helper library**
+   - Created `src/lib/storage.ts` with:
+     - `generateStorageKey()` - Generates unique storage keys with date-based path
+     - `StorageClient` class with methods:
+       - `uploadRecording()` - Uploads recording to S3 with AWS Signature V4
+       - `getRecordingUrl()` - Returns public URL for a recording
+       - `deleteRecording()` - Deletes a recording from S3
+       - `listRecordings()` - Lists recordings under a prefix
+     - TypeScript interfaces for UploadResult and RecordingMetadata
+     - Full AWS Signature V4 implementation for S3 operations
+
+3. **Implemented Recording Complete Webhook endpoint**
+   - Created `src/app/api/twilio/recording/route.ts` with POST handler
+   - Handles Twilio recording status callbacks:
+     - `completed` - Fetches recording from Twilio, uploads to S3, updates database
+     - `failed` - Logs the error and acknowledges
+     - `in-progress` - Acknowledges the callback
+     - `absent` - Acknowledges when no recording was made
+   - Features:
+     - Validates Twilio request signature in production
+     - Parses URL-encoded form data from Twilio
+     - Downloads recording from Twilio API
+     - Uploads recording to S3 with metadata
+     - Updates Call record with recordingUrl
+     - Optionally updates call duration if not already set
+     - Proper error handling for all failure modes
+     - Returns appropriate HTTP status codes (200, 400, 403, 500, 502)
+
+4. **Added TypeScript type definitions**
+   - Updated `src/types/index.ts` with:
+     - `RecordingWebhookResponse` interface
+     - `TwilioRecordingPayload` interface
+
+5. **Created tsconfig.json**
+   - Added TypeScript configuration for the Next.js project
+   - Configured path aliases (@/* -> ./src/*)
+
+6. **Created comprehensive tests**
+   - Created `src/app/api/twilio/recording/__tests__/route.test.ts`
+   - Tests cover:
+     - Successful recording processing (completed status)
+     - Call not found in database handling
+     - Twilio recording fetch failure
+     - S3 upload failure
+     - Duration update when not already set
+     - Duration not overwritten when already set
+     - Failed recording acknowledgment
+     - In-progress recording acknowledgment
+     - Absent recording acknowledgment
+     - Missing CallSid validation
+     - Missing RecordingSid validation
+     - Invalid signature rejection (403)
+     - Unexpected error handling (500)
+     - Unknown status handling
+   - All 14 tests pass
+
+### Files created/modified:
+- `scamscrammer/src/lib/twilio.ts` - Twilio client library
+- `scamscrammer/src/lib/storage.ts` - S3 storage client library
+- `scamscrammer/src/app/api/twilio/recording/route.ts` - Recording webhook endpoint
+- `scamscrammer/src/app/api/twilio/recording/__tests__/route.test.ts` - Webhook tests
+- `scamscrammer/src/types/index.ts` - Added recording webhook types
+- `scamscrammer/tsconfig.json` - TypeScript configuration
+
+### API Endpoint:
+
+**POST /api/twilio/recording**
+
+Handles Twilio recording status callbacks. Configure this URL as the recording status callback in your Twilio call settings.
+
+**Request:** Twilio sends URL-encoded form data with fields:
+- `AccountSid` - Twilio account SID
+- `CallSid` - The call's SID
+- `RecordingSid` - The recording's SID
+- `RecordingUrl` - URL to fetch the recording
+- `RecordingStatus` - One of: `in-progress`, `completed`, `absent`, `failed`
+- `RecordingDuration` - Duration in seconds (for completed)
+- `ErrorCode` - Error code (for failed)
+
+**Response:** JSON with:
+- `success: boolean` - Whether the request was processed
+- `message: string` - Status message
+- `recordingUrl?: string` - S3 URL (for completed recordings)
+
+### Environment Variables Required:
+- `TWILIO_ACCOUNT_SID` - Twilio account SID
+- `TWILIO_AUTH_TOKEN` - Twilio auth token (for signature validation)
+- `AWS_ACCESS_KEY_ID` - AWS access key
+- `AWS_SECRET_ACCESS_KEY` - AWS secret key
+- `S3_BUCKET` - S3 bucket name (default: scamscrammer-recordings)
+- `AWS_REGION` - AWS region (default: us-east-1)
+- `S3_ENDPOINT` - Custom S3 endpoint (optional, for S3-compatible services)
