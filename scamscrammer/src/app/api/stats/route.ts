@@ -5,9 +5,17 @@
  */
 
 import { NextResponse } from 'next/server';
-import prisma from '@/lib/db';
-import type { DashboardStats, ApiErrorResponse, CallListItem } from '@/types';
-import { CallStatus } from '@prisma/client';
+import prisma from '../../../lib/db';
+import type { DashboardStats, ApiErrorResponse, CallListItem } from '../../../types';
+
+// CallStatus enum - matches Prisma schema
+const CallStatus = {
+  RINGING: 'RINGING',
+  IN_PROGRESS: 'IN_PROGRESS',
+  COMPLETED: 'COMPLETED',
+  FAILED: 'FAILED',
+  NO_ANSWER: 'NO_ANSWER'
+} as const;
 
 export async function GET(): Promise<NextResponse<DashboardStats | ApiErrorResponse>> {
   try {

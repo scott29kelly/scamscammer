@@ -74,114 +74,105 @@ Implemented the Twilio Recording Complete Webhook Handler for ScamScrammer. This
 
 ---
 
-## Task: Create Recording Complete Webhook Handler
+## Task: Create WebSocket Voice Stream Handler
 
 **Status:** Completed
 **Date:** 2026-01-19
 
 ### What was done:
 
-1. **Created Twilio helper library**
-   - Created `src/lib/twilio.ts` with:
-     - `validateTwilioSignature()` - Validates Twilio webhook request signatures using HMAC-SHA1
-     - `formatPhoneNumber()` - Formats phone numbers to E.164 format
-     - `TwilioClient` class with methods:
-       - `getAuthToken()` - Returns auth token for signature validation
-       - `getCallDetails()` - Fetches call details from Twilio API
-       - `getRecording()` - Downloads recording audio as Buffer
-       - `generateTwiMLResponse()` - Generates basic TwiML
-       - `generateStreamTwiML()` - Generates TwiML with WebSocket streaming
-     - TypeScript interfaces for TwilioRecordingPayload and TwilioCallDetails
+1. **Installed required dependencies**
+   - Added `openai` - OpenAI SDK for Realtime API integration
+   - Added `twilio` - Twilio SDK for phone call handling and TwiML generation
+   - Added `ws` and `@types/ws` - WebSocket library for Node.js
 
-2. **Created S3 storage helper library**
-   - Created `src/lib/storage.ts` with:
-     - `generateStorageKey()` - Generates unique storage keys with date-based path
-     - `StorageClient` class with methods:
-       - `uploadRecording()` - Uploads recording to S3 with AWS Signature V4
-       - `getRecordingUrl()` - Returns public URL for a recording
-       - `deleteRecording()` - Deletes a recording from S3
-       - `listRecordings()` - Lists recordings under a prefix
-     - TypeScript interfaces for UploadResult and RecordingMetadata
-     - Full AWS Signature V4 implementation for S3 operations
+2. **Created Earl Pemberton Persona Configuration**
+   - Created `src/lib/persona.ts` with comprehensive AI persona:
+     - Earl is an 81-year-old retired refrigerator repairman from Tulsa, OK
+     - Character background, personality traits, and behaviors
+     - 8 tangent topics (General Patton parakeet, Elvis's fridge, trick knee, hummingbirds, etc.)
+     - 24+ mishearing mappings for common scam terms (credit card → bread cart)
+     - 16 signature phrases ("Well I'll be dipped!", etc.)
+     - Helper functions: `getSystemPrompt()`, `getRandomTangent()`, `getMishearing()`, `getRandomPhrase()`, `getGreeting()`
+     - Voice configuration for OpenAI Realtime API
 
-3. **Implemented Recording Complete Webhook endpoint**
-   - Created `src/app/api/twilio/recording/route.ts` with POST handler
-   - Handles Twilio recording status callbacks:
-     - `completed` - Fetches recording from Twilio, uploads to S3, updates database
-     - `failed` - Logs the error and acknowledges
-     - `in-progress` - Acknowledges the callback
-     - `absent` - Acknowledges when no recording was made
-   - Features:
-     - Validates Twilio request signature in production
-     - Parses URL-encoded form data from Twilio
-     - Downloads recording from Twilio API
-     - Uploads recording to S3 with metadata
-     - Updates Call record with recordingUrl
-     - Optionally updates call duration if not already set
-     - Proper error handling for all failure modes
-     - Returns appropriate HTTP status codes (200, 400, 403, 500, 502)
+3. **Created OpenAI Realtime API Client**
+   - Created `src/lib/openai.ts` with full Realtime API integration:
+     - WebSocket connection to `wss://api.openai.com/v1/realtime`
+     - Session configuration with Earl persona system prompt
+     - Audio format: g711_ulaw (μ-law) for Twilio compatibility
+     - Voice Activity Detection (VAD) enabled for natural conversation
+     - Event handlers for audio, transcripts, errors, and lifecycle events
+     - Methods: `connect()`, `sendAudio()`, `commitAudio()`, `clearAudioBuffer()`, `sendText()`, `cancelResponse()`, `disconnect()`
+     - EventEmitter pattern for handling incoming events
 
-4. **Added TypeScript type definitions**
-   - Updated `src/types/index.ts` with:
-     - `RecordingWebhookResponse` interface
-     - `TwilioRecordingPayload` interface
+4. **Created Twilio Client Wrapper**
+   - Created `src/lib/twilio.ts` with Twilio integration utilities:
+     - TwiML generation for media streams: `generateStreamTwiML()`
+     - TwiML helpers: `generateSayTwiML()`, `generateHangupTwiML()`, `generateRejectTwiML()`
+     - Signature validation: `validateSignature()`, `validateRequestSignature()`
+     - API methods: `getCallDetails()`, `getRecording()`
+     - Static utilities:
+       - `formatPhoneNumber()` - E.164 formatting
+       - `parseStreamMessage()` - Parse Twilio media stream events
+       - `createMediaMessage()` - Create audio response messages
+       - `createMarkMessage()` - Create synchronization marks
+       - `createClearMessage()` - Create buffer clear messages
+     - TypeScript interfaces for all Twilio stream event types
 
-5. **Created tsconfig.json**
-   - Added TypeScript configuration for the Next.js project
-   - Configured path aliases (@/* -> ./src/*)
+5. **Created WebSocket Voice Stream Handler**
+   - Created `src/app/api/voice/stream/route.ts` with:
+     - GET endpoint for WebSocket upgrade requests (returns 426/501 appropriately)
+     - POST endpoint for health check
+     - `VoiceStreamHandler` class for WebSocket connection lifecycle:
+       - Handles Twilio media stream events (connected, start, media, stop, mark)
+       - Creates OpenAI Realtime connection on stream start
+       - Bidirectional audio bridging (Twilio ↔ OpenAI)
+       - Saves conversation segments to database
+       - Tracks call duration and updates call status
+       - Clean shutdown and resource cleanup
+     - Active connection management with `Map<streamSid, StreamConnection>`
+     - Helper functions: `getActiveConnectionCount()`, `getActiveConnection()`
+     - Documentation for custom server integration with ws library
 
 6. **Created comprehensive tests**
-   - Created `src/app/api/twilio/recording/__tests__/route.test.ts`
-   - Tests cover:
-     - Successful recording processing (completed status)
-     - Call not found in database handling
-     - Twilio recording fetch failure
-     - S3 upload failure
-     - Duration update when not already set
-     - Duration not overwritten when already set
-     - Failed recording acknowledgment
-     - In-progress recording acknowledgment
-     - Absent recording acknowledgment
-     - Missing CallSid validation
-     - Missing RecordingSid validation
-     - Invalid signature rejection (403)
-     - Unexpected error handling (500)
-     - Unknown status handling
-   - All 14 tests pass
+   - `src/lib/__tests__/persona.test.ts` - 28 tests for persona configuration
+   - `src/lib/__tests__/openai.test.ts` - 16 tests for OpenAI client
+   - `src/lib/__tests__/twilio.test.ts` - 19 tests for Twilio client
+   - `src/app/api/voice/stream/__tests__/route.test.ts` - 14 tests for voice stream handler
+   - All 81 tests pass (including existing stats tests)
+
+### Architecture:
+
+```
+Incoming Call (Twilio)
+        ↓
+/api/twilio/incoming (future)
+        ↓
+Returns TwiML with <Stream> to /api/voice/stream
+        ↓
+WebSocket Connection Established
+        ↓
+VoiceStreamHandler
+    ├── Connects to OpenAI Realtime API
+    ├── Receives audio from Twilio
+    ├── Sends to OpenAI (Earl processes)
+    ├── Receives Earl's response audio
+    ├── Sends back to Twilio
+    └── Saves transcripts to database
+        ↓
+Call Ends → Duration updated in DB
+```
 
 ### Files created/modified:
-- `scamscrammer/src/lib/twilio.ts` - Twilio client library
-- `scamscrammer/src/lib/storage.ts` - S3 storage client library
-- `scamscrammer/src/app/api/twilio/recording/route.ts` - Recording webhook endpoint
-- `scamscrammer/src/app/api/twilio/recording/__tests__/route.test.ts` - Webhook tests
-- `scamscrammer/src/types/index.ts` - Added recording webhook types
-- `scamscrammer/tsconfig.json` - TypeScript configuration
-
-### API Endpoint:
-
-**POST /api/twilio/recording**
-
-Handles Twilio recording status callbacks. Configure this URL as the recording status callback in your Twilio call settings.
-
-**Request:** Twilio sends URL-encoded form data with fields:
-- `AccountSid` - Twilio account SID
-- `CallSid` - The call's SID
-- `RecordingSid` - The recording's SID
-- `RecordingUrl` - URL to fetch the recording
-- `RecordingStatus` - One of: `in-progress`, `completed`, `absent`, `failed`
-- `RecordingDuration` - Duration in seconds (for completed)
-- `ErrorCode` - Error code (for failed)
-
-**Response:** JSON with:
-- `success: boolean` - Whether the request was processed
-- `message: string` - Status message
-- `recordingUrl?: string` - S3 URL (for completed recordings)
-
-### Environment Variables Required:
-- `TWILIO_ACCOUNT_SID` - Twilio account SID
-- `TWILIO_AUTH_TOKEN` - Twilio auth token (for signature validation)
-- `AWS_ACCESS_KEY_ID` - AWS access key
-- `AWS_SECRET_ACCESS_KEY` - AWS secret key
-- `S3_BUCKET` - S3 bucket name (default: scamscrammer-recordings)
-- `AWS_REGION` - AWS region (default: us-east-1)
-- `S3_ENDPOINT` - Custom S3 endpoint (optional, for S3-compatible services)
+- `scamscrammer/src/lib/persona.ts` - Earl Pemberton AI persona configuration
+- `scamscrammer/src/lib/openai.ts` - OpenAI Realtime API WebSocket client
+- `scamscrammer/src/lib/twilio.ts` - Twilio client wrapper with TwiML generation
+- `scamscrammer/src/app/api/voice/stream/route.ts` - WebSocket voice stream handler
+- `scamscrammer/src/lib/__tests__/persona.test.ts` - Persona tests
+- `scamscrammer/src/lib/__tests__/openai.test.ts` - OpenAI client tests
+- `scamscrammer/src/lib/__tests__/twilio.test.ts` - Twilio client tests
+- `scamscrammer/src/app/api/voice/stream/__tests__/route.test.ts` - Voice stream tests
+- `scamscrammer/src/app/api/stats/route.ts` - Updated imports to relative paths
+- `scamscrammer/src/app/api/stats/__tests__/route.test.ts` - Updated imports to relative paths
+- `scamscrammer/package.json` - Added openai, twilio, ws dependencies

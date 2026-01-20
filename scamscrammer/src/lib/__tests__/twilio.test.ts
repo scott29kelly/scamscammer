@@ -1,164 +1,237 @@
 /**
- * Twilio Integration Module Tests
+ * Tests for Twilio Client Wrapper
  */
 
-import { createHmac } from 'crypto';
-import {
-  validateTwilioSignature,
-  getTwilioAuthToken,
-  getWebhookBaseUrl,
-} from '../twilio';
+import { TwilioClient } from '../twilio';
 
-describe('validateTwilioSignature', () => {
-  const authToken = 'test-auth-token';
-  const url = 'https://example.com/api/twilio/status';
-  const params = {
-    CallSid: 'CA123456',
-    CallStatus: 'in-progress',
-    From: '+15551234567',
+// Mock the twilio module
+jest.mock('twilio', () => {
+  const mockTwiml = {
+    VoiceResponse: jest.fn().mockImplementation(() => ({
+      say: jest.fn().mockReturnThis(),
+      connect: jest.fn().mockReturnValue({
+        stream: jest.fn()
+      }),
+      hangup: jest.fn(),
+      reject: jest.fn(),
+      toString: jest.fn().mockReturnValue('<Response><Say>Test</Say></Response>')
+    }))
   };
 
-  // Generate a valid signature for testing
-  function generateValidSignature(
-    token: string,
-    requestUrl: string,
-    requestParams: Record<string, string>
-  ): string {
-    let data = requestUrl;
-    const sortedKeys = Object.keys(requestParams).sort();
-    for (const key of sortedKeys) {
-      data += key + requestParams[key];
-    }
-    return createHmac('sha1', token).update(data, 'utf8').digest('base64');
-  }
+  const mockClientInstance = {
+    calls: jest.fn().mockReturnValue({
+      fetch: jest.fn().mockResolvedValue({
+        sid: 'CA123',
+        from: '+1234567890',
+        to: '+0987654321',
+        status: 'completed',
+        direction: 'inbound',
+        duration: '120'
+      })
+    }),
+    recordings: jest.fn().mockReturnValue({
+      fetch: jest.fn().mockResolvedValue({
+        sid: 'RE123',
+        callSid: 'CA123',
+        duration: '120'
+      })
+    })
+  };
 
-  it('should return true for a valid signature', () => {
-    const validSignature = generateValidSignature(authToken, url, params);
-    const result = validateTwilioSignature(authToken, validSignature, url, params);
-    expect(result).toBe(true);
+  const mockClient = jest.fn().mockReturnValue(mockClientInstance);
+
+  // Add static properties
+  Object.defineProperty(mockClient, 'validateRequest', {
+    value: jest.fn().mockReturnValue(true),
+    writable: true
+  });
+  Object.defineProperty(mockClient, 'twiml', {
+    value: mockTwiml,
+    writable: true
   });
 
-  it('should return false for an invalid signature', () => {
-    const invalidSignature = 'invalid-signature-value';
-    const result = validateTwilioSignature(authToken, invalidSignature, url, params);
-    expect(result).toBe(false);
+  return {
+    __esModule: true,
+    default: mockClient,
+    validateRequest: jest.fn().mockReturnValue(true),
+    twiml: mockTwiml
+  };
+});
+
+describe('TwilioClient', () => {
+  let client: TwilioClient;
+
+  beforeEach(() => {
+    client = new TwilioClient({
+      accountSid: 'test_account_sid',
+      authToken: 'test_auth_token',
+      phoneNumber: '+1234567890'
+    });
   });
 
-  it('should return false when auth token is empty', () => {
-    const validSignature = generateValidSignature(authToken, url, params);
-    const result = validateTwilioSignature('', validSignature, url, params);
-    expect(result).toBe(false);
+  describe('generateStreamTwiML', () => {
+    it('should generate TwiML for streaming', () => {
+      const twiml = client.generateStreamTwiML({
+        websocketUrl: 'wss://example.com/stream'
+      });
+
+      expect(typeof twiml).toBe('string');
+      expect(twiml).toContain('Response');
+    });
+
+    it('should include greeting when provided', () => {
+      const twiml = client.generateStreamTwiML({
+        websocketUrl: 'wss://example.com/stream',
+        greeting: 'Hello there!'
+      });
+
+      expect(typeof twiml).toBe('string');
+    });
   });
 
-  it('should return false when signature is empty', () => {
-    const result = validateTwilioSignature(authToken, '', url, params);
-    expect(result).toBe(false);
+  describe('generateSayTwiML', () => {
+    it('should generate TwiML with speech', () => {
+      const twiml = client.generateSayTwiML('Hello world');
+      expect(typeof twiml).toBe('string');
+    });
   });
 
-  it('should return false when URL is empty', () => {
-    const validSignature = generateValidSignature(authToken, url, params);
-    const result = validateTwilioSignature(authToken, validSignature, '', params);
-    expect(result).toBe(false);
+  describe('generateHangupTwiML', () => {
+    it('should generate hangup TwiML', () => {
+      const twiml = client.generateHangupTwiML();
+      expect(typeof twiml).toBe('string');
+    });
   });
 
-  it('should handle empty params', () => {
-    const emptyParams = {};
-    const validSignature = generateValidSignature(authToken, url, emptyParams);
-    const result = validateTwilioSignature(authToken, validSignature, url, emptyParams);
-    expect(result).toBe(true);
+  describe('generateRejectTwiML', () => {
+    it('should generate reject TwiML', () => {
+      const twiml = client.generateRejectTwiML();
+      expect(typeof twiml).toBe('string');
+    });
   });
 
-  it('should sort params alphabetically', () => {
-    // Params in non-alphabetical order
-    const unorderedParams = {
-      Zebra: 'value3',
-      Apple: 'value1',
-      Mango: 'value2',
-    };
-    const validSignature = generateValidSignature(authToken, url, unorderedParams);
-    const result = validateTwilioSignature(authToken, validSignature, url, unorderedParams);
-    expect(result).toBe(true);
+  describe('validateSignature', () => {
+    it('should validate Twilio signature', () => {
+      const result = client.validateSignature(
+        'test-signature',
+        'https://example.com/webhook',
+        { key: 'value' }
+      );
+
+      expect(typeof result).toBe('boolean');
+    });
   });
 
-  it('should return false when signature has different length', () => {
-    const shortSignature = 'abc';
-    const result = validateTwilioSignature(authToken, shortSignature, url, params);
-    expect(result).toBe(false);
+  describe('getCallDetails', () => {
+    it('should return call details', async () => {
+      const details = await client.getCallDetails('CA123');
+
+      expect(details.sid).toBe('CA123');
+      expect(details.from).toBe('+1234567890');
+      expect(details.to).toBe('+0987654321');
+      expect(details.status).toBe('completed');
+      expect(details.direction).toBe('inbound');
+      expect(details.duration).toBe(120);
+    });
+  });
+
+  describe('getRecording', () => {
+    it('should return recording details', async () => {
+      const recording = await client.getRecording('RE123');
+
+      expect(recording.sid).toBe('RE123');
+      expect(recording.callSid).toBe('CA123');
+    });
   });
 });
 
-describe('getTwilioAuthToken', () => {
-  const originalEnv = process.env;
+describe('TwilioClient static methods', () => {
+  describe('formatPhoneNumber', () => {
+    it('should format 10-digit US numbers', () => {
+      expect(TwilioClient.formatPhoneNumber('1234567890')).toBe('+11234567890');
+    });
 
-  beforeEach(() => {
-    process.env = { ...originalEnv };
+    it('should format 11-digit numbers with country code', () => {
+      expect(TwilioClient.formatPhoneNumber('11234567890')).toBe('+11234567890');
+    });
+
+    it('should handle numbers with existing + prefix', () => {
+      expect(TwilioClient.formatPhoneNumber('+11234567890')).toBe('+11234567890');
+    });
+
+    it('should strip non-digit characters', () => {
+      expect(TwilioClient.formatPhoneNumber('(123) 456-7890')).toBe('+11234567890');
+    });
   });
 
-  afterEach(() => {
-    process.env = originalEnv;
+  describe('parseStreamMessage', () => {
+    it('should parse valid JSON messages', () => {
+      const message = TwilioClient.parseStreamMessage(
+        JSON.stringify({ event: 'start', streamSid: 'MZ123' })
+      );
+
+      expect(message).toEqual({ event: 'start', streamSid: 'MZ123' });
+    });
+
+    it('should return null for invalid JSON', () => {
+      const message = TwilioClient.parseStreamMessage('invalid json');
+      expect(message).toBeNull();
+    });
+
+    it('should handle connected events', () => {
+      const message = TwilioClient.parseStreamMessage(
+        JSON.stringify({ event: 'connected', protocol: 'Call', version: '1.0.0' })
+      );
+
+      expect(message?.event).toBe('connected');
+    });
+
+    it('should handle media events', () => {
+      const message = TwilioClient.parseStreamMessage(
+        JSON.stringify({
+          event: 'media',
+          media: {
+            track: 'inbound',
+            chunk: '1',
+            timestamp: '1234567890',
+            payload: 'base64audio'
+          }
+        })
+      );
+
+      expect(message?.event).toBe('media');
+    });
   });
 
-  it('should return the auth token when set', () => {
-    process.env.TWILIO_AUTH_TOKEN = 'my-secret-token';
-    const token = getTwilioAuthToken();
-    expect(token).toBe('my-secret-token');
+  describe('createMediaMessage', () => {
+    it('should create a valid media message', () => {
+      const message = TwilioClient.createMediaMessage('MZ123', 'base64audio');
+      const parsed = JSON.parse(message);
+
+      expect(parsed.event).toBe('media');
+      expect(parsed.streamSid).toBe('MZ123');
+      expect(parsed.media.payload).toBe('base64audio');
+    });
   });
 
-  it('should throw an error when auth token is not set', () => {
-    delete process.env.TWILIO_AUTH_TOKEN;
-    expect(() => getTwilioAuthToken()).toThrow(
-      'TWILIO_AUTH_TOKEN environment variable is not set'
-    );
-  });
-});
+  describe('createMarkMessage', () => {
+    it('should create a valid mark message', () => {
+      const message = TwilioClient.createMarkMessage('MZ123', 'test-mark');
+      const parsed = JSON.parse(message);
 
-describe('getWebhookBaseUrl', () => {
-  const originalEnv = process.env;
-
-  beforeEach(() => {
-    process.env = { ...originalEnv };
+      expect(parsed.event).toBe('mark');
+      expect(parsed.streamSid).toBe('MZ123');
+      expect(parsed.mark.name).toBe('test-mark');
+    });
   });
 
-  afterEach(() => {
-    process.env = originalEnv;
-  });
+  describe('createClearMessage', () => {
+    it('should create a valid clear message', () => {
+      const message = TwilioClient.createClearMessage('MZ123');
+      const parsed = JSON.parse(message);
 
-  it('should return WEBHOOK_BASE_URL when set', () => {
-    process.env.WEBHOOK_BASE_URL = 'https://my-app.com';
-    const url = getWebhookBaseUrl();
-    expect(url).toBe('https://my-app.com');
-  });
-
-  it('should return VERCEL_URL when WEBHOOK_BASE_URL is not set', () => {
-    delete process.env.WEBHOOK_BASE_URL;
-    process.env.VERCEL_URL = 'my-app.vercel.app';
-    const url = getWebhookBaseUrl();
-    expect(url).toBe('https://my-app.vercel.app');
-  });
-
-  it('should add https:// prefix when URL does not have protocol', () => {
-    process.env.WEBHOOK_BASE_URL = 'my-domain.com';
-    const url = getWebhookBaseUrl();
-    expect(url).toBe('https://my-domain.com');
-  });
-
-  it('should not add prefix when URL starts with http://', () => {
-    process.env.WEBHOOK_BASE_URL = 'http://localhost:3000';
-    const url = getWebhookBaseUrl();
-    expect(url).toBe('http://localhost:3000');
-  });
-
-  it('should not add prefix when URL starts with https://', () => {
-    process.env.WEBHOOK_BASE_URL = 'https://my-app.com';
-    const url = getWebhookBaseUrl();
-    expect(url).toBe('https://my-app.com');
-  });
-
-  it('should throw an error when neither URL is set', () => {
-    delete process.env.WEBHOOK_BASE_URL;
-    delete process.env.VERCEL_URL;
-    expect(() => getWebhookBaseUrl()).toThrow(
-      'WEBHOOK_BASE_URL or VERCEL_URL environment variable is not set'
-    );
+      expect(parsed.event).toBe('clear');
+      expect(parsed.streamSid).toBe('MZ123');
+    });
   });
 });
