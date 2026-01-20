@@ -7,10 +7,41 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
-// Call status enum - tracks the lifecycle of a call
+model Call {
+  id            String      @id @default(cuid())
+  twilioSid     String      @unique
+  fromNumber    String
+  toNumber      String
+  status        CallStatus
+  duration      Int?        // seconds
+  recordingUrl  String?
+  transcriptUrl String?
+  rating        Int?        // 1-5 stars for entertainment value
+  notes         String?
+  tags          String[]    // Array of tags
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  segments      CallSegment[]
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+model CallSegment {
+  id        String   @id @default(cuid())
+  callId    String
+  call      Call     @relation(fields: [callId], references: [id], onDelete: Cascade)
+  speaker   Speaker  // SCAMMER or EARL
+  text      String
+  timestamp Int      // seconds into call
+  createdAt DateTime @default(now())
+
+  @@index([callId])
+}
+
 enum CallStatus {
   RINGING
   IN_PROGRESS
@@ -19,45 +50,7 @@ enum CallStatus {
   NO_ANSWER
 }
 
-// Speaker enum - identifies who is speaking in a call segment
 enum Speaker {
   SCAMMER
   EARL
-}
-
-// Call model - stores metadata for each intercepted scam call
-model Call {
-  id            String      @id @default(cuid())
-  twilioSid     String      @unique // Twilio call SID for tracking
-  fromNumber    String      // Caller's phone number
-  toNumber      String      // Our Twilio phone number
-  status        CallStatus  @default(RINGING)
-  duration      Int?        // Call duration in seconds
-  recordingUrl  String?     // URL to the call recording in S3
-  transcriptUrl String?     // URL to the transcript file
-  rating        Int?        // Entertainment value rating (1-5 stars)
-  notes         String?     // User notes about the call
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
-
-  // Relation to call segments (conversation turns)
-  segments CallSegment[]
-
-  @@index([status])
-  @@index([createdAt])
-  @@index([fromNumber])
-}
-
-// CallSegment model - tracks individual conversation turns
-model CallSegment {
-  id        String   @id @default(cuid())
-  callId    String
-  call      Call     @relation(fields: [callId], references: [id], onDelete: Cascade)
-  speaker   Speaker  // Who is speaking (SCAMMER or EARL)
-  text      String   // Transcribed text of what was said
-  timestamp Int      // Seconds into the call when this segment occurred
-  createdAt DateTime @default(now())
-
-  @@index([callId])
-  @@index([timestamp])
 }

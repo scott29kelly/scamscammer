@@ -1,243 +1,83 @@
 # Ralphy Progress Log
 
-## Task: Create WebSocket Voice Stream Handler
-
-### Completed: 2026-01-19
-
-### Summary
-Implemented the WebSocket Voice Stream Handler for ScamScrammer. This handler creates a bidirectional audio bridge between Twilio Media Streams and OpenAI's Realtime API, enabling real-time voice conversations with the Earl AI persona.
-
-### Files Created
-
-1. **`scamscrammer/src/app/api/voice/stream/route.ts`**
-   - Main WebSocket endpoint for Twilio Media Streams
-   - Handles WebSocket upgrade requests from Twilio
-   - Creates sessions with OpenAI Realtime API for each call
-   - Forwards audio from scammers to OpenAI
-   - Sends Earl's AI-generated responses back to Twilio
-   - Saves conversation transcripts to the database
-   - Clears audio buffer when scammer interrupts (barge-in support)
-   - Tracks session activity and manages cleanup
-
-2. **`scamscrammer/src/app/api/voice/stream/__tests__/route.test.ts`**
-   - Comprehensive test suite with 23 tests using Vitest
-   - Tests POST health check endpoint
-   - Tests Twilio message handling (connected, start, media, stop events)
-   - Tests session creation and cleanup
-   - Tests transcript saving
-   - Tests media forwarding to OpenAI
-   - Tests error handling scenarios
-
-3. **`scamscrammer/src/lib/openai.ts`**
-   - OpenAI Realtime API WebSocket client
-   - Manages connection lifecycle with auto-reconnect
-   - Handles audio streaming and transcription
-   - Supports server-side VAD (Voice Activity Detection)
-   - Factory function `createEarlClient()` pre-configured for Earl persona
-
-4. **`scamscrammer/src/lib/persona.ts`**
-   - Earl Pemberton character configuration
-   - System prompt for the AI persona
-   - Tangent topics, signature phrases, and mishearings
-   - Helper functions for randomizing Earl's behavior
-
-5. **`scamscrammer/src/types/index.ts`** (updated)
-   - Added Twilio Media Stream types:
-     - `TwilioStreamConnectedEvent`
-     - `TwilioStreamStartEvent`
-     - `TwilioStreamMediaEvent`
-     - `TwilioStreamStopEvent`
-     - `TwilioStreamMarkEvent`
-     - Outgoing message types for sending audio back to Twilio
-
-6. **`scamscrammer/package.json`** (updated)
-   - Added `ws` package for WebSocket server support
-   - Added `@types/ws` for TypeScript definitions
-
-### Key Features
-
-- **Bidirectional Audio**: Receives scammer audio and sends Earl's responses
-- **Real-time Processing**: Uses OpenAI Realtime API for low-latency responses
-- **Voice Activity Detection**: Server-side VAD with configurable thresholds
-- **Barge-in Support**: Clears audio buffer when scammer interrupts
-- **Transcript Tracking**: Saves both Earl and scammer transcripts to database
-- **Session Management**: Tracks active sessions with cleanup on disconnect
-- **Error Handling**: Graceful handling of OpenAI and database errors
-
-### WebSocket Flow
-
-1. Twilio connects to `/api/voice/stream` via WebSocket
-2. Handler receives 'connected' event (handshake complete)
-3. Handler receives 'start' event with call metadata
-4. Creates session: finds call in DB, connects to OpenAI
-5. Handler receives 'media' events with audio chunks
-6. Audio forwarded to OpenAI Realtime API
-7. OpenAI processes and generates Earl's response
-8. Earl's audio sent back to Twilio via WebSocket
-9. Transcripts saved to database (CallSegment records)
-10. Handler receives 'stop' event when call ends
-11. Session cleaned up, OpenAI disconnected
-
-### Audio Format
-
-- **Format**: G.711 µ-law (mulaw)
-- **Sample Rate**: 8000 Hz
-- **Channels**: 1 (mono)
-- **Compatible**: Both Twilio and OpenAI support this format natively
-
----
-
-## Task: Create Recording Complete Webhook Handler
-
-### Completed: 2026-01-19
-
-### Summary
-Implemented the Twilio Recording Complete Webhook Handler for ScamScrammer. This webhook handles callbacks from Twilio when call recordings are ready, fetches the recordings, uploads them to S3, and updates the database.
-
-### Files Created
-
-1. **`scamscrammer/src/app/api/twilio/recording/route.ts`**
-   - Main webhook handler for POST requests from Twilio
-   - Validates Twilio signatures for security
-   - Handles multiple recording statuses: completed, failed, in-progress, absent
-   - Downloads completed recordings from Twilio API
-   - Uploads recordings to S3 storage
-   - Updates call records in the database with recording URLs
-   - Implements idempotency (skips already-processed recordings)
-   - Graceful error handling (returns 200 to prevent Twilio retries)
-
-2. **`scamscrammer/src/app/api/twilio/recording/__tests__/route.test.ts`**
-   - Comprehensive test suite using Vitest
-   - Tests signature validation
-   - Tests successful recording processing flow
-   - Tests handling of failed recordings
-   - Tests edge cases (missing call, duplicate processing)
-   - Tests error handling scenarios
-
-3. **Supporting Files (from other branches, recreated for this task)**
-   - `scamscrammer/src/lib/db.ts` - Prisma client singleton
-   - `scamscrammer/src/lib/twilio.ts` - Twilio SDK wrapper and helpers
-   - `scamscrammer/src/lib/storage.ts` - S3 storage client
-   - `scamscrammer/src/types/index.ts` - TypeScript interfaces
-   - `scamscrammer/prisma/schema.prisma` - Database schema
-   - `scamscrammer/package.json` - Dependencies
-   - `scamscrammer/tsconfig.json` - TypeScript config
-   - `scamscrammer/vitest.config.ts` - Test config
-
-### Key Features
-
-- **Security**: Validates Twilio webhook signatures before processing
-- **Reliability**: Returns 200 status to Twilio even on errors to prevent retry loops
-- **Idempotency**: Checks if recording already processed to prevent duplicates
-- **Logging**: Comprehensive logging for debugging and monitoring
-- **Error Notes**: Records recording failures in call notes for visibility
-
-### Webhook Flow
-
-1. Receive POST from Twilio with recording status
-2. Validate Twilio signature
-3. Parse recording payload
-4. If status is 'completed':
-   - Find call in database by Twilio SID
-   - Skip if already has recording URL
-   - Fetch recording details from Twilio API
-   - Download WAV audio from Twilio
-   - Upload to S3 storage
-   - Update call record with S3 URL and duration
-5. If status is 'failed':
-   - Add failure note to call record
-6. Return success response
-
-### Files created/modified:
-- `scamscrammer/prisma/schema.prisma` - Database schema with Call, CallSegment models and enums
-- `scamscrammer/prisma.config.ts` - Prisma 7 configuration
-- `scamscrammer/src/lib/db.ts` - Prisma client singleton
-- `scamscrammer/src/types/index.ts` - TypeScript type definitions
-- `scamscrammer/src/app/api/stats/route.ts` - Stats API endpoint
-- `scamscrammer/src/app/api/stats/__tests__/route.test.ts` - API tests
-- `scamscrammer/jest.config.mjs` - Jest configuration
-- `scamscrammer/jest.setup.js` - Jest setup
-- `scamscrammer/package.json` - Added test scripts and dependencies
-
----
-
 ## Task: Create Calls REST API Endpoints
 
-**Status:** Completed
-**Date:** 2026-01-19
+### Date: 2026-01-19
 
-### What was done:
+### Summary
+Implemented the Calls REST API endpoints for the ScamScrammer project, enabling CRUD operations for call history management.
 
-1. **Created GET /api/calls endpoint** (`src/app/api/calls/route.ts`)
-   - Lists calls with pagination (default: 20 per page, max: 100)
-   - Filtering by:
-     - `status` - filter by CallStatus enum (RINGING, IN_PROGRESS, COMPLETED, FAILED, NO_ANSWER)
-     - `startDate` - filter calls created on or after this date
-     - `endDate` - filter calls created on or before this date
-   - Sorting by:
-     - `sortBy` - field to sort by (createdAt, duration, rating)
-     - `sortOrder` - direction (asc or desc, default: desc)
-   - Returns paginated response with:
-     - `calls` - array of CallListItem objects
-     - `pagination` - metadata (total, page, limit, totalPages, hasNext, hasPrev)
-   - Includes segment count for each call
-   - Validates all query parameters with appropriate error messages
+### Changes Made
 
-2. **Created GET /api/calls/[id] endpoint** (`src/app/api/calls/[id]/route.ts`)
-   - Retrieves single call with all segments
-   - Segments ordered by timestamp (ascending)
-   - Returns 404 if call not found
-   - Returns full CallResponse including all segments
+1. **Project Foundation Setup**
+   - Initialized Next.js 14+ project with TypeScript and Tailwind CSS
+   - Configured Prisma ORM with PostgreSQL schema
+   - Created project directory structure following the plan
 
-3. **Created PATCH /api/calls/[id] endpoint**
-   - Updates call metadata (rating, notes, tags)
-   - Validates:
-     - `rating` - must be integer between 1-5
-     - `notes` - must be string or null
-     - `tags` - must be array of strings
-   - Returns validation errors with details
-   - Returns 404 if call not found
-   - Returns 400 if no valid fields provided
+2. **Database Schema** (`prisma/schema.prisma`)
+   - Created `Call` model with fields: id, twilioSid, fromNumber, toNumber, status, duration, recordingUrl, transcriptUrl, rating, notes, tags
+   - Created `CallSegment` model for transcript segments
+   - Defined `CallStatus` enum (RINGING, IN_PROGRESS, COMPLETED, FAILED, NO_ANSWER)
+   - Defined `Speaker` enum (SCAMMER, EARL)
+   - Added cascade delete for segments when call is deleted
 
-4. **Created DELETE /api/calls/[id] endpoint**
-   - Deletes call and associated segments (via Prisma cascade)
-   - Returns 204 No Content on success
-   - Returns 404 if call not found
-   - Includes TODO for S3 recording cleanup
+3. **Database Client** (`src/lib/db.ts`)
+   - Implemented Prisma client singleton pattern to prevent multiple instances during development
 
-5. **Created tsconfig.json**
-   - Added missing TypeScript configuration file
-   - Configured path aliases (`@/*` -> `./src/*`)
-   - Required for Jest tests to resolve imports
+4. **TypeScript Types** (`src/types/index.ts`)
+   - Created API response types (CallResponse, CallListItem, CallListResponse)
+   - Created pagination types (PaginationInfo)
+   - Created request types (CallListQueryParams, CallUpdatePayload)
+   - Created error response type (ApiErrorResponse)
 
-6. **Created comprehensive test suites**
-   - `src/app/api/calls/__tests__/route.test.ts` (15 tests)
-     - Pagination tests (default, custom, limits)
-     - Filtering tests (status, date range)
-     - Sorting tests (by field, by order)
-     - Validation error tests (invalid status, dates, sort params)
-     - Empty results handling
-     - Database error handling (500 response)
-   - `src/app/api/calls/[id]/__tests__/route.test.ts` (20 tests)
-     - GET: Returns call with segments, 404, 500
-     - PATCH: Update rating, notes, tags (individual and combined)
-     - PATCH: Validation errors (rating range, non-integer, invalid tags)
-     - PATCH: Invalid JSON body, no valid fields
-     - DELETE: Success (204), 404, 500
-   - All 35 tests pass
+5. **Calls List API** (`src/app/api/calls/route.ts`)
+   - GET endpoint for listing calls with:
+     - Pagination (page, limit parameters)
+     - Filtering by status (CallStatus enum)
+     - Filtering by date range (startDate, endDate)
+     - Sorting (sortBy: createdAt | duration, sortOrder: asc | desc)
+     - Includes segment count for each call
 
-### Files created:
-- `scamscrammer/src/app/api/calls/route.ts` - Calls list endpoint (GET)
-- `scamscrammer/src/app/api/calls/[id]/route.ts` - Individual call endpoint (GET, PATCH, DELETE)
-- `scamscrammer/src/app/api/calls/__tests__/route.test.ts` - List endpoint tests
-- `scamscrammer/src/app/api/calls/[id]/__tests__/route.test.ts` - Individual call tests
-- `scamscrammer/tsconfig.json` - TypeScript configuration
+6. **Individual Call API** (`src/app/api/calls/[id]/route.ts`)
+   - GET: Retrieve single call with all segments (ordered by timestamp)
+   - PATCH: Update call rating (1-5), notes (string), tags (string[])
+     - Includes validation for rating range
+     - Returns validation errors with details
+   - DELETE: Remove call and associated data
+     - Uses cascade delete for segments
+     - Placeholder for S3 recording deletion (to be implemented with storage service)
 
-### API Endpoints Summary:
+7. **Tests** (`src/__tests__/api/calls.test.ts`)
+   - 18 comprehensive tests covering:
+     - List endpoint with pagination, filtering, sorting
+     - Single call retrieval
+     - Call updates with validation
+     - Call deletion
+     - Error handling scenarios
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/calls | List calls with pagination, filtering, sorting |
-| GET | /api/calls/[id] | Get single call with all segments |
-| PATCH | /api/calls/[id] | Update rating, notes, tags |
-| DELETE | /api/calls/[id] | Delete call and segments |
+### Files Created/Modified
+- `scamscrammer/` - New Next.js project directory
+- `scamscrammer/prisma/schema.prisma` - Database schema
+- `scamscrammer/src/lib/db.ts` - Database client
+- `scamscrammer/src/types/index.ts` - TypeScript types
+- `scamscrammer/src/app/api/calls/route.ts` - List API endpoint
+- `scamscrammer/src/app/api/calls/[id]/route.ts` - Individual call endpoints
+- `scamscrammer/src/__tests__/api/calls.test.ts` - API tests
+- `scamscrammer/jest.config.mjs` - Jest configuration
+- `scamscrammer/jest.setup.js` - Jest setup file
+- `scamscrammer/package.json` - Added test scripts
+
+### API Endpoints Implemented
+```
+GET  /api/calls              - List all calls (paginated, filterable, sortable)
+GET  /api/calls/:id          - Get single call with segments
+PATCH /api/calls/:id         - Update rating, notes, tags
+DELETE /api/calls/:id        - Delete call and recording
+```
+
+### Test Results
+All 18 tests passing:
+- GET /api/calls: 6 tests
+- GET /api/calls/[id]: 2 tests
+- PATCH /api/calls/[id]: 6 tests
+- DELETE /api/calls/[id]: 3 tests

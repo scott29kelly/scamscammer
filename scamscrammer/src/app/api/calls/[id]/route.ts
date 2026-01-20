@@ -1,19 +1,16 @@
-/**
- * Individual Call API Endpoint
- *
- * GET /api/calls/[id] - Get single call with all segments
- * PATCH /api/calls/[id] - Update call rating, notes, tags
- * DELETE /api/calls/[id] - Delete call and associated data
- */
-
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
-import type { CallResponse, ApiErrorResponse } from '@/types';
+import type { CallResponse, CallUpdatePayload, ApiErrorResponse } from '@/types';
 
 interface RouteParams {
-  params: Promise<{ id: string }>;
+  params: Promise<{
+    id: string;
+  }>;
 }
 
+/**
+ * GET /api/calls/:id - Get a single call with all segments
+ */
 export async function GET(
   request: NextRequest,
   { params }: RouteParams
@@ -25,9 +22,7 @@ export async function GET(
       where: { id },
       include: {
         segments: {
-          orderBy: {
-            timestamp: 'asc',
-          },
+          orderBy: { timestamp: 'asc' },
         },
       },
     });
@@ -39,31 +34,7 @@ export async function GET(
       );
     }
 
-    const response: CallResponse = {
-      id: call.id,
-      twilioSid: call.twilioSid,
-      fromNumber: call.fromNumber,
-      toNumber: call.toNumber,
-      status: call.status,
-      duration: call.duration,
-      recordingUrl: call.recordingUrl,
-      transcriptUrl: call.transcriptUrl,
-      rating: call.rating,
-      notes: call.notes,
-      tags: call.tags,
-      createdAt: call.createdAt,
-      updatedAt: call.updatedAt,
-      segments: call.segments.map((segment) => ({
-        id: segment.id,
-        callId: segment.callId,
-        speaker: segment.speaker,
-        text: segment.text,
-        timestamp: segment.timestamp,
-        createdAt: segment.createdAt,
-      })),
-    };
-
-    return NextResponse.json(response);
+    return NextResponse.json(call);
   } catch (error) {
     console.error('Error fetching call:', error);
     return NextResponse.json(
@@ -73,20 +44,18 @@ export async function GET(
   }
 }
 
-interface UpdateCallBody {
-  rating?: number;
-  notes?: string;
-  tags?: string[];
-}
-
+/**
+ * PATCH /api/calls/:id - Update call rating, notes, or tags
+ */
 export async function PATCH(
   request: NextRequest,
   { params }: RouteParams
 ): Promise<NextResponse<CallResponse | ApiErrorResponse>> {
   try {
     const { id } = await params;
+    const body = await request.json() as CallUpdatePayload;
 
-    // Check if call exists
+    // Validate the call exists
     const existingCall = await prisma.call.findUnique({
       where: { id },
     });
@@ -98,47 +67,32 @@ export async function PATCH(
       );
     }
 
-    // Parse request body
-    let body: UpdateCallBody;
-    try {
-      body = await request.json();
-    } catch {
-      return NextResponse.json(
-        { error: 'Invalid JSON body' },
-        { status: 400 }
-      );
-    }
-
     // Validate and build update data
-    const updateData: { rating?: number; notes?: string; tags?: string[] } = {};
+    const updateData: Partial<CallUpdatePayload> = {};
     const validationErrors: Record<string, string> = {};
 
-    // Validate rating if provided
+    // Validate rating (1-5)
     if (body.rating !== undefined) {
-      if (typeof body.rating !== 'number' || !Number.isInteger(body.rating)) {
-        validationErrors.rating = 'Rating must be an integer';
-      } else if (body.rating < 1 || body.rating > 5) {
-        validationErrors.rating = 'Rating must be between 1 and 5';
+      if (typeof body.rating !== 'number' || body.rating < 1 || body.rating > 5) {
+        validationErrors.rating = 'Rating must be a number between 1 and 5';
       } else {
-        updateData.rating = body.rating;
+        updateData.rating = Math.floor(body.rating);
       }
     }
 
-    // Validate notes if provided
+    // Validate notes (string)
     if (body.notes !== undefined) {
-      if (body.notes !== null && typeof body.notes !== 'string') {
-        validationErrors.notes = 'Notes must be a string or null';
+      if (typeof body.notes !== 'string') {
+        validationErrors.notes = 'Notes must be a string';
       } else {
         updateData.notes = body.notes;
       }
     }
 
-    // Validate tags if provided
+    // Validate tags (array of strings)
     if (body.tags !== undefined) {
-      if (!Array.isArray(body.tags)) {
-        validationErrors.tags = 'Tags must be an array';
-      } else if (!body.tags.every((tag) => typeof tag === 'string')) {
-        validationErrors.tags = 'All tags must be strings';
+      if (!Array.isArray(body.tags) || !body.tags.every(tag => typeof tag === 'string')) {
+        validationErrors.tags = 'Tags must be an array of strings';
       } else {
         updateData.tags = body.tags;
       }
@@ -147,10 +101,7 @@ export async function PATCH(
     // Return validation errors if any
     if (Object.keys(validationErrors).length > 0) {
       return NextResponse.json(
-        {
-          error: 'Validation failed',
-          details: validationErrors,
-        },
+        { error: 'Validation failed', details: validationErrors },
         { status: 400 }
       );
     }
@@ -158,10 +109,7 @@ export async function PATCH(
     // Check if there's anything to update
     if (Object.keys(updateData).length === 0) {
       return NextResponse.json(
-        {
-          error: 'No valid fields to update',
-          details: { body: 'Provide at least one of: rating, notes, tags' },
-        },
+        { error: 'No valid fields to update' },
         { status: 400 }
       );
     }
@@ -172,38 +120,12 @@ export async function PATCH(
       data: updateData,
       include: {
         segments: {
-          orderBy: {
-            timestamp: 'asc',
-          },
+          orderBy: { timestamp: 'asc' },
         },
       },
     });
 
-    const response: CallResponse = {
-      id: updatedCall.id,
-      twilioSid: updatedCall.twilioSid,
-      fromNumber: updatedCall.fromNumber,
-      toNumber: updatedCall.toNumber,
-      status: updatedCall.status,
-      duration: updatedCall.duration,
-      recordingUrl: updatedCall.recordingUrl,
-      transcriptUrl: updatedCall.transcriptUrl,
-      rating: updatedCall.rating,
-      notes: updatedCall.notes,
-      tags: updatedCall.tags,
-      createdAt: updatedCall.createdAt,
-      updatedAt: updatedCall.updatedAt,
-      segments: updatedCall.segments.map((segment) => ({
-        id: segment.id,
-        callId: segment.callId,
-        speaker: segment.speaker,
-        text: segment.text,
-        timestamp: segment.timestamp,
-        createdAt: segment.createdAt,
-      })),
-    };
-
-    return NextResponse.json(response);
+    return NextResponse.json(updatedCall);
   } catch (error) {
     console.error('Error updating call:', error);
     return NextResponse.json(
@@ -213,6 +135,9 @@ export async function PATCH(
   }
 }
 
+/**
+ * DELETE /api/calls/:id - Delete a call and its associated data
+ */
 export async function DELETE(
   request: NextRequest,
   { params }: RouteParams
@@ -220,28 +145,29 @@ export async function DELETE(
   try {
     const { id } = await params;
 
-    // Check if call exists
-    const existingCall = await prisma.call.findUnique({
+    // Check if the call exists and get recording URL
+    const call = await prisma.call.findUnique({
       where: { id },
+      select: { id: true, recordingUrl: true },
     });
 
-    if (!existingCall) {
+    if (!call) {
       return NextResponse.json(
         { error: 'Call not found' },
         { status: 404 }
       );
     }
 
-    // Delete the call (segments are deleted via cascade)
+    // TODO: Delete recording from S3 storage if recordingUrl exists
+    // This will be implemented when the storage service is ready
+    // if (call.recordingUrl) {
+    //   await storage.deleteRecording(call.id);
+    // }
+
+    // Delete the call (segments are cascade deleted via Prisma relation)
     await prisma.call.delete({
       where: { id },
     });
-
-    // TODO: Also delete recording from S3 storage if recordingUrl exists
-    // This would require importing the storage service:
-    // if (existingCall.recordingUrl) {
-    //   await storage.deleteRecording(id);
-    // }
 
     return new NextResponse(null, { status: 204 });
   } catch (error) {

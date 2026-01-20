@@ -1,107 +1,66 @@
-/**
- * Calls API Endpoint
- *
- * GET /api/calls - List calls with pagination, filtering, and sorting
- */
-
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
-import type { CallListResponse, ApiErrorResponse, CallListItem } from '@/types';
-import { CallStatus, Prisma } from '@prisma/client';
+import type { CallListResponse, CallListQueryParams, ApiErrorResponse } from '@/types';
+import { CallStatus } from '@prisma/client';
 
-export async function GET(
-  request: NextRequest
-): Promise<NextResponse<CallListResponse | ApiErrorResponse>> {
+/**
+ * GET /api/calls - List all calls with pagination, filtering, and sorting
+ */
+export async function GET(request: NextRequest): Promise<NextResponse<CallListResponse | ApiErrorResponse>> {
   try {
     const searchParams = request.nextUrl.searchParams;
+    const params: CallListQueryParams = {
+      page: searchParams.get('page') ?? undefined,
+      limit: searchParams.get('limit') ?? undefined,
+      status: searchParams.get('status') as CallStatus | undefined,
+      startDate: searchParams.get('startDate') ?? undefined,
+      endDate: searchParams.get('endDate') ?? undefined,
+      sortBy: searchParams.get('sortBy') as 'createdAt' | 'duration' | undefined,
+      sortOrder: searchParams.get('sortOrder') as 'asc' | 'desc' | undefined,
+    };
 
     // Parse pagination parameters
-    const page = Math.max(1, parseInt(searchParams.get('page') ?? '1', 10));
-    const limit = Math.min(100, Math.max(1, parseInt(searchParams.get('limit') ?? '20', 10)));
+    const page = Math.max(1, parseInt(params.page ?? '1', 10));
+    const limit = Math.min(100, Math.max(1, parseInt(params.limit ?? '20', 10)));
     const skip = (page - 1) * limit;
 
-    // Parse filter parameters
-    const status = searchParams.get('status');
-    const startDate = searchParams.get('startDate');
-    const endDate = searchParams.get('endDate');
+    // Build where clause for filtering
+    const where: {
+      status?: CallStatus;
+      createdAt?: {
+        gte?: Date;
+        lte?: Date;
+      };
+    } = {};
 
-    // Parse sorting parameters
-    const sortBy = searchParams.get('sortBy') ?? 'createdAt';
-    const sortOrder = searchParams.get('sortOrder') ?? 'desc';
-
-    // Validate sortBy parameter
-    const validSortFields = ['createdAt', 'duration', 'rating'];
-    if (!validSortFields.includes(sortBy)) {
-      return NextResponse.json(
-        {
-          error: 'Invalid sort field',
-          details: { sortBy: `Must be one of: ${validSortFields.join(', ')}` },
-        },
-        { status: 400 }
-      );
+    // Filter by status
+    if (params.status && Object.values(CallStatus).includes(params.status)) {
+      where.status = params.status;
     }
 
-    // Validate sortOrder parameter
-    if (!['asc', 'desc'].includes(sortOrder)) {
-      return NextResponse.json(
-        {
-          error: 'Invalid sort order',
-          details: { sortOrder: 'Must be either "asc" or "desc"' },
-        },
-        { status: 400 }
-      );
-    }
-
-    // Validate status parameter if provided
-    if (status && !Object.values(CallStatus).includes(status as CallStatus)) {
-      return NextResponse.json(
-        {
-          error: 'Invalid status filter',
-          details: { status: `Must be one of: ${Object.values(CallStatus).join(', ')}` },
-        },
-        { status: 400 }
-      );
-    }
-
-    // Build where clause
-    const where: Prisma.CallWhereInput = {};
-
-    if (status) {
-      where.status = status as CallStatus;
-    }
-
-    if (startDate) {
-      const parsedStartDate = new Date(startDate);
-      if (isNaN(parsedStartDate.getTime())) {
-        return NextResponse.json(
-          {
-            error: 'Invalid start date',
-            details: { startDate: 'Must be a valid ISO date string' },
-          },
-          { status: 400 }
-        );
+    // Filter by date range
+    if (params.startDate || params.endDate) {
+      where.createdAt = {};
+      if (params.startDate) {
+        const startDate = new Date(params.startDate);
+        if (!isNaN(startDate.getTime())) {
+          where.createdAt.gte = startDate;
+        }
       }
-      where.createdAt = { ...((where.createdAt as Prisma.DateTimeFilter) || {}), gte: parsedStartDate };
-    }
-
-    if (endDate) {
-      const parsedEndDate = new Date(endDate);
-      if (isNaN(parsedEndDate.getTime())) {
-        return NextResponse.json(
-          {
-            error: 'Invalid end date',
-            details: { endDate: 'Must be a valid ISO date string' },
-          },
-          { status: 400 }
-        );
+      if (params.endDate) {
+        const endDate = new Date(params.endDate);
+        if (!isNaN(endDate.getTime())) {
+          // Set to end of day
+          endDate.setHours(23, 59, 59, 999);
+          where.createdAt.lte = endDate;
+        }
       }
-      where.createdAt = { ...((where.createdAt as Prisma.DateTimeFilter) || {}), lte: parsedEndDate };
     }
 
     // Build orderBy clause
-    const orderBy: Prisma.CallOrderByWithRelationInput = {
-      [sortBy]: sortOrder as 'asc' | 'desc',
-    };
+    const sortBy = params.sortBy ?? 'createdAt';
+    const sortOrder = params.sortOrder ?? 'desc';
+    const orderBy = { [sortBy]: sortOrder };
 
     // Execute queries in parallel
     const [calls, total] = await Promise.all([
@@ -112,38 +71,17 @@ export async function GET(
         take: limit,
         include: {
           _count: {
-            select: {
-              segments: true,
-            },
+            select: { segments: true },
           },
         },
       }),
       prisma.call.count({ where }),
     ]);
 
-    // Calculate pagination info
     const totalPages = Math.ceil(total / limit);
 
-    // Map to CallListItem format
-    const callListItems: CallListItem[] = calls.map((call) => ({
-      id: call.id,
-      twilioSid: call.twilioSid,
-      fromNumber: call.fromNumber,
-      toNumber: call.toNumber,
-      status: call.status,
-      duration: call.duration,
-      recordingUrl: call.recordingUrl,
-      transcriptUrl: call.transcriptUrl,
-      rating: call.rating,
-      notes: call.notes,
-      tags: call.tags,
-      createdAt: call.createdAt,
-      updatedAt: call.updatedAt,
-      _count: call._count,
-    }));
-
     const response: CallListResponse = {
-      calls: callListItems,
+      calls,
       pagination: {
         total,
         page,
