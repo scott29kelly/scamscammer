@@ -102,3 +102,28 @@ export interface DashboardStats {
   topRatedCalls: CallListItem[];
   longestCalls: CallListItem[];
 }
+
+/**
+ * Recording webhook response
+ */
+export interface RecordingWebhookResponse {
+  success: boolean;
+  message: string;
+  recordingUrl?: string;
+}
+
+/**
+ * Twilio recording status callback payload
+ */
+export interface TwilioRecordingPayload {
+  AccountSid: string;
+  CallSid: string;
+  RecordingSid: string;
+  RecordingUrl: string;
+  RecordingStatus: 'in-progress' | 'completed' | 'absent' | 'failed';
+  RecordingDuration?: string;
+  RecordingChannels?: string;
+  RecordingSource?: string;
+  RecordingStartTime?: string;
+  ErrorCode?: string;
+}
