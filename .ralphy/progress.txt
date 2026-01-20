@@ -67,3 +67,64 @@
 - `scamscrammer/jest.config.mjs` - Jest configuration
 - `scamscrammer/jest.setup.js` - Jest setup
 - `scamscrammer/package.json` - Added test scripts and dependencies
+
+---
+
+## Task: Create Incoming Call Webhook Handler
+
+**Status:** Completed
+**Date:** 2026-01-19
+
+### What was done:
+
+1. **Created Twilio client wrapper**
+   - Created `src/lib/twilio.ts` with:
+     - Lazy-initialized Twilio client getter
+     - Twilio request signature validation helpers
+     - TwiML generation functions (createStreamingTwiml, createSimpleTwiml, createErrorTwiml)
+     - TypeScript interfaces for Twilio webhook parameters (TwilioIncomingCallParams, TwilioStatusCallbackParams)
+   - Installed `twilio` package as dependency
+
+2. **Created Earl persona configuration**
+   - Created `src/lib/persona.ts` with:
+     - EARL_GREETING - Initial greeting message for incoming calls
+     - EARL_SYSTEM_PROMPT - Full AI persona system prompt for OpenAI
+     - TANGENT_TOPICS - Array of Earl's favorite conversation tangents
+     - MISHEARINGS - Dictionary of common words Earl mishears
+     - SIGNATURE_PHRASES - Earl's favorite expressions
+     - Helper functions: getRandomPhrase(), getRandomTangent()
+
+3. **Implemented incoming call webhook handler**
+   - Created `src/app/api/twilio/incoming/route.ts` with POST handler that:
+     - Parses form data from Twilio webhook requests
+     - Validates Twilio signature for security (skipped in development mode)
+     - Creates Call record in database with RINGING status
+     - Handles duplicate call SIDs gracefully (webhook idempotency)
+     - Returns TwiML response with Earl's greeting and WebSocket stream URL
+     - Returns error TwiML on failures (so calls are still answered)
+   - Builds WebSocket URL from NEXT_PUBLIC_APP_URL or request host
+
+4. **Created TypeScript configuration**
+   - Created `tsconfig.json` (was missing from project)
+   - Configured path aliases (@/*) for clean imports
+   - Set up Next.js-compatible TypeScript settings
+
+5. **Wrote comprehensive tests**
+   - Created `src/app/api/twilio/incoming/__tests__/route.test.ts` with 8 tests:
+     - Handles incoming call and returns TwiML response
+     - Returns error TwiML when required parameters are missing
+     - Handles duplicate call SID gracefully
+     - Returns 403 for invalid Twilio signature in production
+     - Skips signature validation in development mode
+     - Uses configured app URL for stream URL in production
+     - Returns error TwiML on unexpected errors
+     - Logs call details for debugging
+   - All 8 tests passing
+
+### Files created/modified:
+- `scamscrammer/src/lib/twilio.ts` - Twilio client wrapper and TwiML helpers
+- `scamscrammer/src/lib/persona.ts` - Earl AI persona configuration
+- `scamscrammer/src/app/api/twilio/incoming/route.ts` - Incoming call webhook handler
+- `scamscrammer/src/app/api/twilio/incoming/__tests__/route.test.ts` - Webhook tests (8 tests)
+- `scamscrammer/tsconfig.json` - TypeScript configuration
+- `scamscrammer/package.json` - Added twilio dependency
