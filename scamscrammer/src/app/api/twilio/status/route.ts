@@ -16,7 +16,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import {
   validateTwilioSignature,
-  getTwilioAuthToken,
   getWebhookBaseUrl,
   type TwilioCallStatus,
 } from '@/lib/twilio';

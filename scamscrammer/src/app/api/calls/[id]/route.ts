@@ -56,6 +56,10 @@ export async function GET(
       rating: call.rating,
       notes: call.notes,
       tags: call.tags,
+      isPublic: call.isPublic,
+      isFeatured: call.isFeatured,
+      persona: call.persona,
+      title: call.title,
       createdAt: call.createdAt,
       updatedAt: call.updatedAt,
       segments: call.segments.map((segment) => ({
@@ -159,6 +163,10 @@ export async function PATCH(
       rating: call.rating,
       notes: call.notes,
       tags: call.tags,
+      isPublic: call.isPublic,
+      isFeatured: call.isFeatured,
+      persona: call.persona,
+      title: call.title,
       createdAt: call.createdAt,
       updatedAt: call.updatedAt,
       segments: call.segments.map((segment) => ({

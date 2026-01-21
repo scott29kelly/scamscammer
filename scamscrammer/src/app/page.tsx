@@ -131,6 +131,12 @@ export default function Dashboard() {
                 All Calls
               </Link>
               <Link
+                href="/docs/api"
+                className="px-4 py-2 text-sm font-medium text-gray-300 hover:text-white transition-colors"
+              >
+                API Docs
+              </Link>
+              <Link
                 href="/login"
                 className="px-4 py-2 text-sm font-medium bg-orange-600 hover:bg-orange-500 rounded-lg transition-colors"
               >
@@ -346,9 +352,19 @@ export default function Dashboard() {
       {/* Footer */}
       <footer className="border-t border-gray-800 mt-12">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          <p className="text-center text-sm text-gray-500">
-            ScamScrammer &mdash; Wasting scammers&apos; time so they can&apos;t waste yours.
-          </p>
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <p className="text-sm text-gray-500">
+              ScamScrammer &mdash; Wasting scammers&apos; time so they can&apos;t waste yours.
+            </p>
+            <div className="flex items-center gap-6">
+              <Link href="/calls" className="text-sm text-gray-400 hover:text-gray-200 transition-colors">
+                All Calls
+              </Link>
+              <Link href="/docs/api" className="text-sm text-gray-400 hover:text-gray-200 transition-colors">
+                API Documentation
+              </Link>
+            </div>
+          </div>
         </div>
       </footer>
     </div>

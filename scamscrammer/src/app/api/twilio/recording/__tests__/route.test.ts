@@ -47,7 +47,9 @@ const mockPrisma = prisma as jest.Mocked<typeof prisma>;
 import { TwilioClient, createTwilioClient, validateTwilioSignature } from '@/lib/twilio';
 import { StorageClient } from '@/lib/storage';
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const mockTwilioClient = TwilioClient as jest.MockedClass<typeof TwilioClient>;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const mockCreateTwilioClient = createTwilioClient as jest.MockedFunction<typeof createTwilioClient>;
 const mockStorageClient = StorageClient as jest.MockedClass<typeof StorageClient>;
 const mockValidateSignature = validateTwilioSignature as jest.MockedFunction<

@@ -166,7 +166,6 @@ export default function CallList({
       fetchCalls(1);
     }
     // Only re-fetch when sort changes, not on initial load
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sortField, sortOrder]);
 
   const handlePageChange = (newPage: number) => {

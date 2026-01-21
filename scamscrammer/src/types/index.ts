@@ -1,4 +1,4 @@
-import { Call, CallSegment, CallStatus, Speaker } from '@prisma/client';
+import { Call, CallSegment, CallStatus } from '@prisma/client';
 
 // Re-export Prisma types for convenience
 export type { Call, CallSegment, User, Session } from '@prisma/client';

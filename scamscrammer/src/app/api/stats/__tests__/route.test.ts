@@ -14,6 +14,7 @@ const CallStatus = {
   NO_ANSWER: 'NO_ANSWER',
 } as const;
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 type CallStatusType = (typeof CallStatus)[keyof typeof CallStatus];
 
 // Mock the Prisma client - define inside factory to avoid hoisting issues

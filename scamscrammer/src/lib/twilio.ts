@@ -6,7 +6,6 @@
  */
 
 import twilio from 'twilio';
-import crypto from 'crypto';
 
 export interface TwilioConfig {
   accountSid: string;

@@ -412,6 +412,7 @@ describe('POST /api/twilio/status', () => {
 
   it('should return 401 when signature is invalid', async () => {
     // Re-mock validateTwilioSignature to return false for this test
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { validateTwilioSignature } = require('@/lib/twilio');
     (validateTwilioSignature as jest.Mock).mockReturnValueOnce(false);
 
