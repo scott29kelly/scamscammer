@@ -286,4 +286,100 @@ describe('GET /api/calls', () => {
     );
     expect(data.calls).toHaveLength(2);
   });
+
+  it('should filter by startDate', async () => {
+    (mockPrisma.call.count as jest.Mock).mockResolvedValue(1);
+    (mockPrisma.call.findMany as jest.Mock).mockResolvedValue([mockCalls[0]]);
+
+    const response = await GET(createRequest('/api/calls?startDate=2026-01-15'));
+    await response.json();
+
+    expect(response.status).toBe(200);
+    expect(mockPrisma.call.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          createdAt: expect.objectContaining({
+            gte: new Date('2026-01-15'),
+          }),
+        }),
+      })
+    );
+  });
+
+  it('should filter by endDate', async () => {
+    (mockPrisma.call.count as jest.Mock).mockResolvedValue(1);
+    (mockPrisma.call.findMany as jest.Mock).mockResolvedValue([mockCalls[1]]);
+
+    const response = await GET(createRequest('/api/calls?endDate=2026-01-14'));
+    await response.json();
+
+    expect(response.status).toBe(200);
+    expect(mockPrisma.call.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          createdAt: expect.objectContaining({
+            lte: expect.any(Date),
+          }),
+        }),
+      })
+    );
+  });
+
+  it('should filter by date range (startDate and endDate)', async () => {
+    (mockPrisma.call.count as jest.Mock).mockResolvedValue(2);
+    (mockPrisma.call.findMany as jest.Mock).mockResolvedValue(mockCalls);
+
+    const response = await GET(
+      createRequest('/api/calls?startDate=2026-01-14&endDate=2026-01-15')
+    );
+    await response.json();
+
+    expect(response.status).toBe(200);
+    expect(mockPrisma.call.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          createdAt: expect.objectContaining({
+            gte: new Date('2026-01-14'),
+            lte: expect.any(Date),
+          }),
+        }),
+      })
+    );
+  });
+
+  it('should ignore invalid date formats', async () => {
+    (mockPrisma.call.count as jest.Mock).mockResolvedValue(2);
+    (mockPrisma.call.findMany as jest.Mock).mockResolvedValue(mockCalls);
+
+    const response = await GET(createRequest('/api/calls?startDate=not-a-date'));
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    // Should not include date filter for invalid date
+    expect(mockPrisma.call.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {},
+      })
+    );
+    expect(data.calls).toHaveLength(2);
+  });
+
+  it('should handle ISO date format for startDate', async () => {
+    (mockPrisma.call.count as jest.Mock).mockResolvedValue(1);
+    (mockPrisma.call.findMany as jest.Mock).mockResolvedValue([mockCalls[0]]);
+
+    const response = await GET(createRequest('/api/calls?startDate=2026-01-15T10:00:00Z'));
+    await response.json();
+
+    expect(response.status).toBe(200);
+    expect(mockPrisma.call.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          createdAt: expect.objectContaining({
+            gte: new Date('2026-01-15T10:00:00Z'),
+          }),
+        }),
+      })
+    );
+  });
 });

@@ -35,6 +35,8 @@ export async function GET(
     const search = searchParams.get('search');
     const minRating = searchParams.get('minRating');
     const tag = searchParams.get('tag');
+    const startDate = searchParams.get('startDate');
+    const endDate = searchParams.get('endDate');
 
     // Parse sort parameters
     const sortField = (searchParams.get('sortBy') || 'createdAt') as SortField;
@@ -74,6 +76,31 @@ export async function GET(
 
     if (tag) {
       where.tags = { has: tag };
+    }
+
+    // Date range filtering
+    if (startDate || endDate) {
+      const dateFilter: { gte?: Date; lte?: Date } = {};
+
+      if (startDate) {
+        const parsedStartDate = new Date(startDate);
+        if (!isNaN(parsedStartDate.getTime())) {
+          dateFilter.gte = parsedStartDate;
+        }
+      }
+
+      if (endDate) {
+        const parsedEndDate = new Date(endDate);
+        if (!isNaN(parsedEndDate.getTime())) {
+          // Set to end of day for inclusive end date
+          parsedEndDate.setHours(23, 59, 59, 999);
+          dateFilter.lte = parsedEndDate;
+        }
+      }
+
+      if (dateFilter.gte || dateFilter.lte) {
+        where.createdAt = dateFilter;
+      }
     }
 
     // Build orderBy clause

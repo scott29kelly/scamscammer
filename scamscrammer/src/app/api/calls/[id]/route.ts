@@ -3,11 +3,13 @@
  *
  * GET /api/calls/[id] - Returns a single call with all segments
  * PATCH /api/calls/[id] - Updates a call's rating, notes, or tags
+ * DELETE /api/calls/[id] - Deletes a call and its recordings from S3
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
-import type { CallResponse, ApiErrorResponse } from '@/types';
+import type { CallResponse, ApiErrorResponse, StorageDeleteResult } from '@/types';
+import { storageClient } from '@/lib/storage';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -174,6 +176,95 @@ export async function PATCH(
     console.error('Error updating call:', error);
     return NextResponse.json(
       { error: 'Failed to update call' },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * DELETE /api/calls/[id]
+ * Delete a call record and its associated S3 recordings
+ */
+export async function DELETE(
+  request: NextRequest,
+  { params }: RouteParams
+): Promise<NextResponse<StorageDeleteResult | ApiErrorResponse>> {
+  try {
+    const { id } = await params;
+
+    // Find the call to get recording URL before deleting
+    const call = await prisma.call.findUnique({
+      where: { id },
+    });
+
+    if (!call) {
+      return NextResponse.json(
+        { error: 'Call not found' },
+        { status: 404 }
+      );
+    }
+
+    // Extract S3 key from recording URL if it exists
+    let recordingKey: string | undefined;
+    if (call.recordingUrl) {
+      // Recording URLs are in format: https://endpoint/bucket/key
+      // We need to extract the key portion
+      try {
+        const url = new URL(call.recordingUrl);
+        // The path will be /bucket/key, we want everything after the bucket
+        const pathParts = url.pathname.split('/').filter(Boolean);
+        if (pathParts.length >= 2) {
+          // Skip the bucket name (first part) and join the rest as the key
+          recordingKey = pathParts.slice(1).join('/');
+        }
+      } catch {
+        // Invalid URL format, skip S3 deletion
+        console.warn(`Invalid recording URL format for call ${id}: ${call.recordingUrl}`);
+      }
+    }
+
+    // Delete the recording from S3 if we have a key
+    let recordingDeleted = false;
+    if (recordingKey) {
+      try {
+        recordingDeleted = await storageClient.deleteRecording(recordingKey);
+        if (!recordingDeleted) {
+          console.warn(`Failed to delete recording from S3 for call ${id}: ${recordingKey}`);
+        }
+      } catch (storageError) {
+        // Log but don't fail the request if S3 deletion fails
+        console.error(`Error deleting recording from S3 for call ${id}:`, storageError);
+      }
+    }
+
+    // Delete transcript from S3 if it exists
+    if (call.transcriptUrl) {
+      try {
+        const transcriptUrl = new URL(call.transcriptUrl);
+        const transcriptPathParts = transcriptUrl.pathname.split('/').filter(Boolean);
+        if (transcriptPathParts.length >= 2) {
+          const transcriptKey = transcriptPathParts.slice(1).join('/');
+          await storageClient.deleteRecording(transcriptKey);
+        }
+      } catch {
+        // Log but don't fail if transcript deletion fails
+        console.warn(`Failed to delete transcript for call ${id}`);
+      }
+    }
+
+    // Delete the call from the database (segments will cascade delete due to schema)
+    await prisma.call.delete({
+      where: { id },
+    });
+
+    return NextResponse.json({
+      success: true,
+      key: recordingKey,
+    });
+  } catch (error) {
+    console.error('Error deleting call:', error);
+    return NextResponse.json(
+      { error: 'Failed to delete call' },
       { status: 500 }
     );
   }

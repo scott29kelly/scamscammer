@@ -1,5 +1,80 @@
 # Ralphy Progress Log
 
+## Task: Create Calls REST API Endpoints
+
+**Status:** Completed
+**Date:** 2026-01-20
+
+### What was done:
+
+1. **Added date range filtering to GET /api/calls**
+   - Added `startDate` query parameter for filtering calls from a specific date
+   - Added `endDate` query parameter for filtering calls up to a specific date
+   - Supports ISO date format (e.g., `2026-01-15` or `2026-01-15T10:00:00Z`)
+   - End date is inclusive (includes calls through end of day)
+   - Invalid date formats are gracefully ignored
+
+2. **Implemented DELETE /api/calls/[id] endpoint**
+   - Deletes call record from database (segments cascade delete via Prisma schema)
+   - Extracts S3 key from recording URL and deletes recording from S3 storage
+   - Also deletes transcript from S3 if it exists
+   - Gracefully handles S3 deletion failures (logs warning but still deletes DB record)
+   - Handles invalid recording URL formats
+   - Returns `{ success: true, key?: string }` on success
+   - Returns 404 if call not found
+   - Returns 500 on database error
+
+3. **Added comprehensive tests for date range filtering**
+   - Tests for `startDate` filter only
+   - Tests for `endDate` filter only
+   - Tests for combined date range filtering
+   - Tests for invalid date format handling
+   - Tests for ISO date format support
+
+4. **Added comprehensive tests for DELETE endpoint**
+   - Tests successful deletion with S3 recording cleanup
+   - Tests deletion of call without recording URL
+   - Tests 404 for non-existent call
+   - Tests that database deletion still succeeds even if S3 fails
+   - Tests 500 on database error
+   - Tests transcript deletion from S3
+   - Tests handling of invalid recording URL format
+
+### API Endpoints Summary:
+
+**GET /api/calls** - List calls with pagination, filtering, and sorting
+- Query params: `page`, `limit`, `status`, `search`, `minRating`, `tag`, `startDate`, `endDate`, `sortBy`, `sortOrder`
+- Returns: `{ calls: CallListItem[], pagination: PaginationInfo }`
+
+**GET /api/calls/[id]** - Fetch single call with all segments
+- Returns: `CallResponse` with full call data and segments array
+- Status codes: 200, 404, 500
+
+**PATCH /api/calls/[id]** - Update call rating, notes, or tags
+- Request body: `{ rating?: 1-5, notes?: string, tags?: string[] }`
+- Returns: Updated `CallResponse`
+- Status codes: 200, 400, 404, 500
+
+**DELETE /api/calls/[id]** - Delete call and S3 recordings
+- Returns: `{ success: true, key?: string }`
+- Status codes: 200, 404, 500
+
+### Files modified:
+- `scamscrammer/src/app/api/calls/route.ts` - Added startDate/endDate filtering
+- `scamscrammer/src/app/api/calls/[id]/route.ts` - Added DELETE handler with S3 cleanup
+- `scamscrammer/src/app/api/calls/__tests__/route.test.ts` - Added 6 date filtering tests
+- `scamscrammer/src/app/api/calls/[id]/__tests__/route.test.ts` - Added 7 DELETE endpoint tests
+
+### Test Results:
+All 133 tests pass:
+- 20 tests for GET /api/calls (including new date range tests)
+- 12 tests for GET /api/calls/[id]
+- 12 tests for PATCH /api/calls/[id]
+- 7 tests for DELETE /api/calls/[id] (new)
+- Plus 82 other tests for other endpoints and utilities
+
+---
+
 ## Task: Create Deployment Configuration
 
 **Status:** Completed

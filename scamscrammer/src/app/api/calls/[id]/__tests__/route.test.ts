@@ -2,8 +2,9 @@
  * Call Detail API Endpoint Tests
  */
 
-import { GET, PATCH } from '../route';
+import { GET, PATCH, DELETE } from '../route';
 import prisma from '@/lib/db';
+import { storageClient } from '@/lib/storage';
 import { NextRequest } from 'next/server';
 import { CallStatus, Speaker } from '@prisma/client';
 
@@ -14,11 +15,20 @@ jest.mock('@/lib/db', () => ({
     call: {
       findUnique: jest.fn(),
       update: jest.fn(),
+      delete: jest.fn(),
     },
   },
 }));
 
+// Mock the storage client
+jest.mock('@/lib/storage', () => ({
+  storageClient: {
+    deleteRecording: jest.fn(),
+  },
+}));
+
 const mockPrisma = prisma as jest.Mocked<typeof prisma>;
+const mockStorageClient = storageClient as jest.Mocked<typeof storageClient>;
 
 // Helper to create mock call data
 const createMockCall = (overrides = {}) => ({
@@ -307,5 +317,146 @@ describe('PATCH /api/calls/[id]', () => {
 
     expect(response.status).toBe(500);
     expect(data).toHaveProperty('error', 'Failed to update call');
+  });
+});
+
+describe('DELETE /api/calls/[id]', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('should delete a call and its S3 recording', async () => {
+    const mockCall = createMockCall({
+      recordingUrl: 'https://s3.us-east-1.amazonaws.com/scamscrammer-recordings/recordings/2026/01/15/CA123456789/REC123.mp3',
+    });
+
+    (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(mockCall);
+    (mockPrisma.call.delete as jest.Mock).mockResolvedValue(mockCall);
+    (mockStorageClient.deleteRecording as jest.Mock).mockResolvedValue(true);
+
+    const request = createMockRequest();
+    const response = await DELETE(request, createParams('call-123'));
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(data).toHaveProperty('success', true);
+    expect(data).toHaveProperty('key', 'recordings/2026/01/15/CA123456789/REC123.mp3');
+
+    expect(mockPrisma.call.delete).toHaveBeenCalledWith({
+      where: { id: 'call-123' },
+    });
+    expect(mockStorageClient.deleteRecording).toHaveBeenCalledWith(
+      'recordings/2026/01/15/CA123456789/REC123.mp3'
+    );
+  });
+
+  it('should delete a call without recording URL', async () => {
+    const mockCall = createMockCall({
+      recordingUrl: null,
+    });
+
+    (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(mockCall);
+    (mockPrisma.call.delete as jest.Mock).mockResolvedValue(mockCall);
+
+    const request = createMockRequest();
+    const response = await DELETE(request, createParams('call-123'));
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(data).toHaveProperty('success', true);
+    expect(data.key).toBeUndefined();
+
+    expect(mockPrisma.call.delete).toHaveBeenCalledWith({
+      where: { id: 'call-123' },
+    });
+    expect(mockStorageClient.deleteRecording).not.toHaveBeenCalled();
+  });
+
+  it('should return 404 for non-existent call', async () => {
+    (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(null);
+
+    const request = createMockRequest();
+    const response = await DELETE(request, createParams('non-existent'));
+    const data = await response.json();
+
+    expect(response.status).toBe(404);
+    expect(data).toHaveProperty('error', 'Call not found');
+    expect(mockPrisma.call.delete).not.toHaveBeenCalled();
+  });
+
+  it('should still delete call even if S3 deletion fails', async () => {
+    const mockCall = createMockCall({
+      recordingUrl: 'https://s3.us-east-1.amazonaws.com/bucket/recordings/test.mp3',
+    });
+
+    (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(mockCall);
+    (mockPrisma.call.delete as jest.Mock).mockResolvedValue(mockCall);
+    (mockStorageClient.deleteRecording as jest.Mock).mockRejectedValue(
+      new Error('S3 deletion failed')
+    );
+
+    const request = createMockRequest();
+    const response = await DELETE(request, createParams('call-123'));
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(data).toHaveProperty('success', true);
+    expect(mockPrisma.call.delete).toHaveBeenCalled();
+  });
+
+  it('should return 500 on database error', async () => {
+    const mockCall = createMockCall();
+    (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(mockCall);
+    (mockPrisma.call.delete as jest.Mock).mockRejectedValue(
+      new Error('Database connection failed')
+    );
+
+    const request = createMockRequest();
+    const response = await DELETE(request, createParams('call-123'));
+    const data = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(data).toHaveProperty('error', 'Failed to delete call');
+  });
+
+  it('should delete transcript from S3 if it exists', async () => {
+    const mockCall = createMockCall({
+      recordingUrl: 'https://s3.us-east-1.amazonaws.com/bucket/recordings/call.mp3',
+      transcriptUrl: 'https://s3.us-east-1.amazonaws.com/bucket/transcripts/call.txt',
+    });
+
+    (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(mockCall);
+    (mockPrisma.call.delete as jest.Mock).mockResolvedValue(mockCall);
+    (mockStorageClient.deleteRecording as jest.Mock).mockResolvedValue(true);
+
+    const request = createMockRequest();
+    const response = await DELETE(request, createParams('call-123'));
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(data).toHaveProperty('success', true);
+
+    // Should have been called twice - once for recording, once for transcript
+    expect(mockStorageClient.deleteRecording).toHaveBeenCalledTimes(2);
+    expect(mockStorageClient.deleteRecording).toHaveBeenCalledWith('recordings/call.mp3');
+    expect(mockStorageClient.deleteRecording).toHaveBeenCalledWith('transcripts/call.txt');
+  });
+
+  it('should handle invalid recording URL gracefully', async () => {
+    const mockCall = createMockCall({
+      recordingUrl: 'not-a-valid-url',
+    });
+
+    (mockPrisma.call.findUnique as jest.Mock).mockResolvedValue(mockCall);
+    (mockPrisma.call.delete as jest.Mock).mockResolvedValue(mockCall);
+
+    const request = createMockRequest();
+    const response = await DELETE(request, createParams('call-123'));
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(data).toHaveProperty('success', true);
+    expect(mockPrisma.call.delete).toHaveBeenCalled();
+    expect(mockStorageClient.deleteRecording).not.toHaveBeenCalled();
   });
 });
